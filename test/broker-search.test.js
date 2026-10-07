@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 // HOME at a scratch directory *before* the dynamic import below.
 const scratchHome = mkdtempSync(join(tmpdir(), 'dsh-mcp-manager-search-'));
 process.env.HOME = scratchHome;
+ process.env.USERPROFILE = scratchHome;
 process.env.DSH_HOME = scratchHome;
 
 const {

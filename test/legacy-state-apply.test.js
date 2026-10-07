@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 // HOME at a scratch directory *before* the dynamic import below.
 const home = mkdtempSync(join(tmpdir(), 'dsh-mcp-manager-home-'));
 process.env.HOME = home;
+ process.env.USERPROFILE = home;
 mkdirSync(join(home, '.dsh'), { recursive: true });
 const statePath = join(home, '.dsh', 'mcp-manager.json');
 writeFileSync(statePath, JSON.stringify({

@@ -6,6 +6,7 @@ import { after, it } from 'node:test';
 
 const scratchHome = mkdtempSync(join(tmpdir(), 'dsh-mm-language-'));
 process.env.HOME = scratchHome;
+ process.env.USERPROFILE = scratchHome;
 process.env.DSH_HOME = join(scratchHome, '.dsh');
 const statePath = join(scratchHome, '.dsh', 'mcp-manager.json');
 const { apply } = await import('../lib/index.js');

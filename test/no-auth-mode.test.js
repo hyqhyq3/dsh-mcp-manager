@@ -7,8 +7,12 @@ import { after, it } from 'node:test';
 
 // STATE_PATH is derived from homedir() at module evaluation, so point HOME at a
 // scratch directory *before* the dynamic import below. Never touch a real ~/.dsh.
+// USERPROFILE matters on Windows: os.homedir() reads it, not HOME, so omitting it
+// let an earlier revision of this suite write reg-oauth/reg-static/reg-bogus/
+// noauth straight into the developer's real ~/.dsh/mcp-manager.json.
 const scratchHome = mkdtempSync(join(tmpdir(), 'dsh-mm-noauth-'));
 process.env.HOME = scratchHome;
+process.env.USERPROFILE = scratchHome;
 process.env.DSH_HOME = join(scratchHome, '.dsh');
 mkdirSync(join(scratchHome, '.dsh'), { recursive: true });
 const statePath = join(scratchHome, '.dsh', 'mcp-manager.json');
