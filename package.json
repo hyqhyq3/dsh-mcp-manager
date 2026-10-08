@@ -1,7 +1,7 @@
 {
   "name": "dsh-mcp-manager",
   "description": "MCP server manager for DeepSeek Harness: OAuth/stdio servers, workspace isolation, and an opt-in on-demand tool broker",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

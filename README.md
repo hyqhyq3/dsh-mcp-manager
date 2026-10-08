@@ -11,6 +11,7 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 - **No auth** mode for servers that need no credentials at all (e.g. a local `http://127.0.0.1:9316/mcp`) — the plugin sends no `Authorization` header and connects on save.
 - **Custom HTTP headers** (`headers` for direct values, `headerEnv` for values read from environment variables) — matches Codex's `http_headers` / `env_http_headers`.
 - **stdio local processes**: run `npx` / `uvx` / `python` etc. directly; the plugin speaks JSON-RPC over the child's stdin/stdout (spawns the process, reconnects, and reaps it on exit) — no remote server or auth required. Windows `.cmd` shims (e.g. `npx.cmd`) are resolved through `cmd.exe`.
+- **HTTP-with-SSE servers**: the legacy SSE transport (a GET event stream that advertises a session endpoint, with replies delivered asynchronously on that stream) is detected automatically and used when a server rejects a plain POST. Streamable HTTP servers are unaffected.
 - **Edit-in-place**: rename a server, switch stdio ↔ HTTP, or change auth/headers without deleting and re-adding it.
 - **Tool registration** with the same `mcp__<server>__<rawName>` naming convention as the built-in client, including strict-schema sanitization for the DSH tool registry and `isConcurrencySafe` marking.
 - **Workspace isolation**: declare per-project servers in `<workspace>/.dsh/dshmm/mcp.json` — their tools register only into that workspace's sessions, and you can mask specific global servers per workspace.
@@ -102,7 +103,8 @@ Global servers (added in **Settings → MCP**) are visible in every workspace. U
 | OAuth flow | Host half does dynamic client registration + PKCE; the redirect lands on a route mounted on the DSH GUI webserver itself |
 | Token storage | `~/.dsh/mcp-manager.json`; OAuth tokens refreshed automatically on 401. Static tokens are read from the environment variable named by `tokenEnv` — never persisted. No-auth servers store no credential and send no `Authorization` header |
 | Legacy state | On load, servers without an `id` are assigned one (and persisted), and legacy `[{ name, value }]` env/header lists are normalized to maps — without this, id-addressed APIs 404 and array env values are dropped silently |
-| MCP transport (HTTP) | Streamable HTTP (JSON-RPC over POST, `Mcp-Session-Id`, SSE or JSON responses); custom `headers`/`headerEnv` merged into every request |
+| MCP transport (HTTP) | Streamable HTTP (JSON-RPC over POST, `Mcp-Session-Id`, SSE or JSON responses) with automatic fallback to the legacy HTTP-with-SSE session transport — a GET stream advertises the POST endpoint and delivers replies asynchronously; custom `headers`/`headerEnv` merged into every request |
+| Reconnect | A failed connect retries with exponential backoff (3s → 6s → 12s … capped at 60s, reset on success); an SSE session whose stream drops immediately reconnects, and its in-flight calls fail fast instead of blocking until timeout |
 | MCP transport (stdio) | `child_process.spawn` a local command, JSON-RPC over stdin/stdout (newline-delimited); reconnect reaps the old process first. On Windows it spawns through `cmd.exe` so `.cmd` shims resolve |
 | Tool schema | Server JSON Schemas are sanitized to the registry's supported raw subset (unsupported vocabulary degrades to unconstrained) |
 | Image results | `output.render` is text-first; `execute(args, exec)` stages a projection and `finalizeContent` installs durable DSH attachments only when the routed model declares image input — every other case degrades to a text placeholder |

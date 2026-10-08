@@ -11,6 +11,7 @@
 - **无鉴权**模式：适配完全不需要凭据的服务器（例如本机 `http://127.0.0.1:9316/mcp`）——插件不发送 `Authorization` 头，保存后直接连接。
 - **自定义 HTTP 标头**：`headers`（直接值）+ `headerEnv`（值取自环境变量），对齐 Codex 的 `http_headers` / `env_http_headers`。
 - **stdio 本地进程**：直接跑 `npx` / `uvx` / `python` 等命令，插件用 JSON-RPC over stdin/stdout 与之通信（自动拉起子进程、重连、退出时回收），无需任何远程服务器或认证。Windows 的 `.cmd` shim（如 `npx.cmd`）通过 `cmd.exe` 解析。
+- **HTTP-with-SSE 服务器**：自动识别并接入旧式 SSE 传输（GET 事件流先给出会话端点，响应全部经该流异步回传），服务器拒绝普通 POST 时自动切换。Streamable HTTP 服务器不受影响。
 - **就地编辑**：重命名、stdio ↔ HTTP 切换、改认证方式/标头，无需删除重建。
 - **工具注册**：与内置客户端相同的 `mcp__<server>__<rawName>` 命名约定，含 DSH 工具注册表的严格 schema 清洗，并标记 `isConcurrencySafe`。
 - **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话，还可按工作区屏蔽指定的全局服务器。
@@ -102,7 +103,8 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 | OAuth 流程 | host 半做动态客户端注册 + PKCE；重定向落在 DSH GUI webserver 自身挂载的路由上 |
 | Token 存储 | `~/.dsh/mcp-manager.json`；OAuth token 401 时自动刷新。静态 token 从 `tokenEnv` 指定的环境变量读取，不落盘。无鉴权服务器不存凭据、也不发送 `Authorization` 头 |
 | 旧状态迁移 | 加载时给缺少 `id` 的服务器补一个并落盘，同时把 `[{ name, value }]` 形式的 env/header 列表归一化为映射——否则按 id 的 API 会 404、数组形式的 env 会被静默丢弃 |
-| MCP 传输（HTTP） | Streamable HTTP（POST JSON-RPC、`Mcp-Session-Id`、SSE/JSON 双格式响应）；每次请求合并自定义 `headers`/`headerEnv` |
+| MCP 传输（HTTP） | Streamable HTTP（POST JSON-RPC、`Mcp-Session-Id`、SSE/JSON 双格式响应），并在服务器拒绝普通 POST 时自动降级到旧式 HTTP-with-SSE 会话传输（GET 流给出 POST 端点、响应经该流异步回传）；每次请求合并自定义 `headers`/`headerEnv` |
+| 断线重连 | 连接失败按指数退避重试（3s → 6s → 12s … 上限 60s，成功即重置）；SSE 会话的流一旦断开立即重连，在途调用快速失败而不是阻塞到超时 |
 | MCP 传输（stdio） | `child_process.spawn` 拉起本地命令，JSON-RPC over stdin/stdout（换行分隔），重连时先回收旧进程。Windows 下经 `cmd.exe` 启动以解析 `.cmd` shim |
 | 工具 schema | 服务器 JSON Schema 清洗为注册表支持的 raw 子集（不支持的关键字降级为无约束） |
 | 图片结果 | `output.render` 文本优先；`execute(args, exec)` 暂存投影，`finalizeContent` 仅在路由模型声明图片输入时装上持久化 DSH attachment，其余情况降级为文本占位符 |
