@@ -8,7 +8,7 @@ import { after, describe, it } from 'node:test';
 
 // STATE_PATH is derived from homedir() when the module is evaluated, so point the
 // home environment at a scratch directory *before* the dynamic import below.
-// On Windows `os.homedir()` reads USERPROFILE, not HOME 鈥?set both, plus DSH_HOME,
+// On Windows `os.homedir()` reads USERPROFILE, not HOME - set both, plus DSH_HOME,
 // so a run can never touch the real ~/.dsh (see AGENTS.md).
 const SCRATCH_HOME = mkdtempSync(join(tmpdir(), 'dsh-mcp-manager-sse-home-'));
 process.env.HOME = SCRATCH_HOME;
@@ -161,7 +161,7 @@ describe('HTTP-with-SSE transport', () => {
   });
 
   it('still uses Streamable HTTP when the server answers a POST with JSON', async (t) => {
-    // Same shape as before, but the POST replies inline 鈥?no SSE session needed.
+    // Same shape as before, but the POST replies inline - no SSE session needed.
     let sessionSeq = 0;
     const server = createServer((req, res) => {
       let body = '';
@@ -189,11 +189,11 @@ describe('HTTP-with-SSE transport', () => {
     assert.equal(await waitFor(() => registered.has('mcp__httpSrv__http_tool')), true, 'the Streamable HTTP path must stay intact');
   });
 
-  it('surfaces the server鈥檚 own 401 wording instead of a bare generic message', async (t) => {
+  it('surfaces the server’s own 401 wording instead of a bare generic message', async (t) => {
     const fake = await startSseServer();
     t.after(() => fake.close());
 
-    // Wrong token: the SSE GET is rejected, so nothing registers 鈥?but the reason
+    // Wrong token: the SSE GET is rejected, so nothing registers - but the reason
     // must survive into the log rather than being flattened to "authentication required".
     const logged = [];
     writeFileSync(

@@ -18,7 +18,7 @@ sessionId query parameter is not provided
 so such a server could never connect. Reproduction on the unmodified tree:
 
 ```
-$ node --test test/http-sse-transport.test.js     # against the upstream code
+$ node --test test/sse-basic.test.js     # against the upstream code
   ✖ connects to a server that answers a bare POST with a sessionId complaint
 ```
 
@@ -55,7 +55,8 @@ New files:
 
 | File | Covers |
 |---|---|
-| `test/http-sse-transport.test.js` | 7 tests: session connect, `tools/call` over the stream, Streamable HTTP unaffected, 401 wording passthrough, self-reconnect after the server drops the stream, in-flight calls failing fast, protocol-revision warning |
+| `test/sse-basic.test.js` | 5 tests: session connect, `tools/call` over the stream, Streamable HTTP unaffected, 401 wording passthrough, protocol-revision warning |
+| `test/sse-reconnect.test.js` | 2 tests: self-reconnect after the server drops the stream, in-flight calls failing fast |
 | `test/concurrency-safety.test.js` | 6 tests over the real 150-tool Burp catalog |
 
 ### Against the live server
