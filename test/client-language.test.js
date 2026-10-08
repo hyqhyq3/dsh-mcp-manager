@@ -149,3 +149,76 @@ it('offers a no-auth HTTP mode and hides the token field when selected', async (
   assert.match(text(tree), /No auth \(server needs no credentials\)/);
   assert.doesNotMatch(text(tree), /Bearer token environment variable/);
 });
+
+it('collects manual OAuth client credentials only while OAuth is selected', async () => {
+  const app = mount(async () => response({}));
+  let tree = app.render();
+  nodes(tree).find((node) => node.props['aria-label'] === 'Add MCP server').props.onClick();
+  tree = app.render();
+  const form = content(tree);
+  app.reset();
+  tree = app.render(form.type, form.props);
+
+  assert.match(text(tree), /OAuth Client ID/);
+  assert.match(text(tree), /Client secret environment variable name/);
+  assert.match(text(tree), /Scope \(optional/);
+  const inputs = nodes(tree).filter((node) => node.type === 'input');
+  const clientIdInput = inputs.find((node) => node.props.placeholder === 'Ov23li…');
+  const secretInput = inputs.find((node) => node.props.placeholder === 'GITHUB_OAUTH_CLIENT_SECRET');
+  const scopeInput = inputs.find((node) => node.props.placeholder === 'repo read:org');
+  assert.ok(clientIdInput && secretInput && scopeInput, 'all three OAuth fields render');
+  clientIdInput.props.onChange({ target: { value: 'my-client' } });
+  secretInput.props.onChange({ target: { value: 'MY_SECRET_ENV' } });
+  scopeInput.props.onChange({ target: { value: 'repo' } });
+  tree = app.render(form.type, form.props);
+
+  // Switching to a non-OAuth mode hides them again.
+  nodes(tree).find((node) => node.type === 'select' && node.props.value === 'oauth').props.onChange({ target: { value: 'none' } });
+  tree = app.render(form.type, form.props);
+  assert.doesNotMatch(text(tree), /OAuth Client ID/);
+  assert.doesNotMatch(text(tree), /Client secret environment variable name/);
+});
+
+it('shows a collapsed connection error and lazily loads the attempt log', async () => {
+  const calls = [];
+  const server = { id: 'srv-1', name: 'github', type: 'http', url: 'https://api.githubcopilot.com/mcp/', authMode: 'oauth', status: 'error', error: 'client registration failed: HTTP 404 — this authorization server may not support dynamic client registration', toolCount: 0, enabled: true };
+  const app = mount(async (url) => {
+    calls.push(url);
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    if (url.endsWith('/servers/srv-1/logs')) return response({ logs: [{ at: 1700000000000, phase: 'discovery', url: 'https://github.com/.well-known/oauth-authorization-server/login/oauth', status: 200, detail: 'authorization server metadata' }] });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+
+  const cardNode = (t) => nodes(t).find((node) => node.props?.server?.id === 'srv-1');
+  const renderCard = (node) => { app.reset(); return app.render(node.type, node.props); };
+
+  // The reason is visible without expanding the card...
+  const collapsed = renderCard(cardNode(tree));
+  assert.match(text(collapsed), /may not support dynamic client registration/);
+  assert.doesNotMatch(text(collapsed), /Logs/, 'the log toggle lives in the expanded card');
+  assert.ok(!calls.some((url) => url.endsWith('/logs')), 'logs must not be fetched until requested');
+
+  // ...and expanding the card reveals the lazily-loaded log panel.
+  const expanded = renderCard({ type: cardNode(tree).type, props: { ...cardNode(tree).props, open: true } });
+  assert.match(text(expanded), /may not support dynamic client registration/, 'the reason stays visible while expanded');
+  const logNode = nodes(expanded).find((node) => node.props?.serverId === 'srv-1');
+  assert.ok(logNode, 'the log panel renders once expanded');
+
+  // The panel itself is collapsed until toggled, then fetches on demand.
+  const logProps = { ...logNode.props, key: 'logs' };
+  let log = renderCard({ type: logNode.type, props: logProps });
+  assert.match(text(log), /Logs/);
+  assert.doesNotMatch(text(log), /No log entries yet/, 'the log body is hidden until toggled');
+  assert.ok(!calls.some((url) => url.endsWith('/logs')), 'opening the card alone must not fetch the log');
+  nodes(log).find((node) => node.props.className === 'mm_logToggle').props.onClick();
+  await settle();
+  log = app.render(logNode.type, logProps);
+  assert.ok(calls.some((url) => url.endsWith('/servers/srv-1/logs')), 'the toggle must fetch the log');
+  assert.match(text(log), /authorization server metadata/);
+});
+

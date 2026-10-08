@@ -6,13 +6,16 @@
 
 内置的 `@deepseek-ai/dsh-mcp-client` 只接受静态 `headers` 配置——不支持 OAuth，也不支持本地 stdio 进程。本插件补上这块：
 
-- **OAuth（授权码 + PKCE）**：RFC 7591 动态客户端注册、`refresh_token` 自动轮换、重启后自动重连——浏览器登录一次，之后一直可用。
+- **OAuth（授权码 + PKCE）**：规范化的元数据发现、RFC 7591 动态客户端注册、`refresh_token` 自动轮换、重启后自动重连——浏览器登录一次，之后一直可用。
+  - **发现链**按 RFC 9728 → RFC 8414 顺序：MCP 端点 401 响应里的 `WWW-Authenticate` 指向受保护资源元数据，该文档再指出授权服务器，最后按 RFC 8414 的「路径插值」URL 读取授权服务器元数据（如 `https://github.com/.well-known/oauth-authorization-server/login/oauth`）。只有完全发现不到时才回退到猜测 `${origin}/oauth/*`，且日志里会说明这是猜的。
+  - **手动客户端凭据**：适配不支持动态注册的授权服务器（GitHub 就不支持）——填 **Client ID**（你在提供方注册的应用），可选填 **Client Secret 环境变量名**（作为 `client_secret` 发送，密钥本身绝不落盘），以及 **Scope**。
 - **静态 Bearer Token** 模式：适配没有 OAuth 的服务器——以环境变量**名称**（Codex 风格 `tokenEnv`）引用，token 明文不落盘。
 - **无鉴权**模式：适配完全不需要凭据的服务器（例如本机 `http://127.0.0.1:9316/mcp`）——插件不发送 `Authorization` 头，保存后直接连接。
 - **自定义 HTTP 标头**：`headers`（直接值）+ `headerEnv`（值取自环境变量），对齐 Codex 的 `http_headers` / `env_http_headers`。
 - **stdio 本地进程**：直接跑 `npx` / `uvx` / `python` 等命令，插件用 JSON-RPC over stdin/stdout 与之通信（自动拉起子进程、重连、退出时回收），无需任何远程服务器或认证。Windows 的 `.cmd` shim（如 `npx.cmd`）通过 `cmd.exe` 解析。
 - **HTTP-with-SSE 服务器**：自动识别并接入旧式 SSE 传输（GET 事件流先给出会话端点，响应全部经该流异步回传），服务器拒绝普通 POST 时自动切换。Streamable HTTP 服务器不受影响。
 - **就地编辑**：重命名、stdio ↔ HTTP 切换、改认证方式/标头，无需删除重建。
+- **界面内诊断**：失败的服务器在**折叠状态**就显示失败原因（无需展开），展开后还有 **日志 / Logs** 面板——按需加载、已脱敏的轨迹，覆盖每一次发现 URL 与 HTTP 状态、客户端注册、授权跳转、token 交换/刷新、`initialize`、`tools/list`，以及 stdio 子进程退出时的 stderr 尾部。脱敏在**写入时**完成（Bearer 值、`code`/`state`、`client_secret`、token 一律剥掉），而不是渲染时。
 - **工具注册**：与内置客户端相同的 `mcp__<server>__<rawName>` 命名约定，含 DSH 工具注册表的严格 schema 清洗，并标记 `isConcurrencySafe`。
 - **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话，还可按工作区屏蔽指定的全局服务器。
 - **可选按需 broker**：模型侧固定只暴露 `mcp_search_tools`、`mcp_describe_tool`、`mcp_execute_tool`，不再每轮发送所有 `mcp__*` schema。默认关闭，必须手动开启。 `mcp_search_tools` 是零依赖词法排序器（BM25 + CJK/别名/模糊，且支持列目录兜底）。
@@ -44,14 +47,14 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-mana
 1. 打开 DSH Web UI 的 **设置 → MCP**。
 2. **＋ 添加 MCP 服务器**（之后可用 **编辑** 修改）：
    - **作用域 Scope**：`user` = 全局服务器（所有工作区可用）；`workspace` = 绑定到某个工作区（配置写入该工作区的 `.dsh/dshmm/mcp.json`），从第二个下拉框选择工作区。
-   - **HTTP**：名称（决定 `mcp__<name>__*` 前缀）、URL、认证方式（OAuth、静态 token 或无鉴权）、可选标头（`headers` 直接值、`headerEnv` 值取自环境变量）。
+   - **HTTP**：名称（决定 `mcp__<name>__*` 前缀）、URL、认证方式（OAuth、静态 token 或无鉴权）、可选标头（`headers` 直接值、`headerEnv` 值取自环境变量）。OAuth 模式下还可预注册客户端：**Client ID**、**Client Secret 环境变量名**、**Scope**（均为可选）。
    - **stdio**：名称、命令（如 `npx`）、参数（逐行填写）、环境变量（键/值逐行）、可选工作目录。
-3. OAuth 服务器：点 **去认证** → 浏览器打开登录页 → 同意授权后跳回，工具立即注册。
+3. OAuth 服务器：点 **去认证** → 浏览器打开登录页 → 同意授权后跳回，工具立即注册。若授权服务器公布了 `registration_endpoint`，插件会自行注册（RFC 7591），Client ID 可以留空；若没有——GitHub 的 `https://github.com/login/oauth` 就是常见情况——请在提供方注册一个 OAuth App，填入其 **Client ID**（若是机密客户端，再填**存放 secret 的环境变量名**），把 **Scope** 设成 MCP 端点需要的范围（如 `repo read:org`），并在提供方处把 `http://127.0.0.1:<port>/mcp-manager/callback/<id>` 加进重定向白名单。不填 Client ID 时，失败会给出解释而不是一句 `HTTP 404`，**日志**面板会列出所有试过的 URL。
 4. 静态 token 服务器：填写**存放 token 的环境变量名**（如 `MCP_BEARER_TOKEN`）——token 本身不写入磁盘；stdio 服务器保存后立即拉起本地进程并连接。
 5. 无鉴权服务器：选择 **无鉴权（服务器无需认证）**——插件不发送 `Authorization` 头，保存后直接连接；适用于不做认证的端点（例如本机 `http://127.0.0.1:9316/mcp`）。
 6. 可选：打开页面顶部的**按需 MCP 工具调用**。该开关对整个 profile 生效，重启后保持，并在现有会话的下一次请求开始生效。
 
-状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。按钮：去认证、编辑、启用/禁用（开关）、删除。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
+状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。按钮：去认证、编辑、启用/禁用（开关）、删除。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要，展开后可用 **日志 / Logs**。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
 
 ### Agent 看到什么
 
@@ -93,15 +96,17 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 - `exclude` 列出要在此工作区隐藏的全局服务器（通过工具注册表的按 agent 限制屏蔽其工具）。在工作区视图里点每条全局服务器上的**隐藏**复选框即可切换。
 - `serverName` 在「全局 + 所有工作区来源」之间必须唯一；重复的名称会被标记为冲突并跳过（UI 里可见）。
 - 配置在每个新会话时重读，并通过文件监听热更新。
-- 工作区服务器支持 **stdio**、**HTTP 静态 token**（`tokenEnv`）、**HTTP OAuth**（与全局服务器相同的 PKCE + 动态客户端注册流程）与 **HTTP 无鉴权**（`authMode: "none"`，不发 `Authorization` 头）。工作区 OAuth token 持久化在 `~/.dsh/mcp-manager.json`（绝不写进声明式的 `mcp.json`）；每条工作区 OAuth 服务器行都有「去认证」按钮。
+- 工作区服务器支持 **stdio**、**HTTP 静态 token**（`tokenEnv`）、**HTTP OAuth**（与全局服务器相同的发现 + PKCE + 动态客户端注册流程，手写配置同样支持可选的 `clientId` / `clientSecretEnv` / `scope`）与 **HTTP 无鉴权**（`authMode: "none"`，不发 `Authorization` 头）。工作区 OAuth token 持久化在 `~/.dsh/mcp-manager.json`（绝不写进声明式的 `mcp.json`）；每条工作区 OAuth 服务器行都有「去认证」按钮。
 
 ## 工作原理
 
 | 组成 | 机制 |
 |---|---|
 | 设置页 | client 半注册 `settings.section` 槽位（MCP 页签） |
-| OAuth 流程 | host 半做动态客户端注册 + PKCE；重定向落在 DSH GUI webserver 自身挂载的路由上 |
-| Token 存储 | `~/.dsh/mcp-manager.json`；OAuth token 401 时自动刷新。静态 token 从 `tokenEnv` 指定的环境变量读取，不落盘。无鉴权服务器不存凭据、也不发送 `Authorization` 头 |
+| OAuth 流程 | host 半先发现授权服务器（RFC 9728 受保护资源元数据 → RFC 8414 授权服务器元数据），再做动态客户端注册（或使用手动配置的 Client ID）+ PKCE；重定向落在 DSH GUI webserver 自身挂载的路由上 |
+| OAuth 发现 | 解析 MCP 端点 401 响应里的 `WWW-Authenticate` 的 `resource_metadata` 并缓存到该服务器；资源元数据指出授权服务器，其元数据按 RFC 8414 路径插值 well-known URL 读取（另有 OpenID configuration 与 origin 级探测）。猜测的 `${origin}/oauth/*` 只是最后兜底，并会标记为 fallback |
+| 诊断日志 | 每服务器一个内存环形缓冲（最多 20 条），记录 discovery/register/authorize/token/initialize/tools-list/stdio 各阶段及 URL 与 HTTP 状态，经 `GET /mcp-manager/api/servers/:id/logs` 暴露；写入时即脱敏，且不落盘（写日志文件会引入新的静态密钥面） |
+| Token 存储 | `~/.dsh/mcp-manager.json`；OAuth token 401 时自动刷新。静态 token 从 `tokenEnv` 指定的环境变量读取，OAuth `client_secret` 从 `clientSecretEnv` 指定的环境变量读取，两者的值都不落盘。无鉴权服务器不存凭据、也不发送 `Authorization` 头 |
 | 旧状态迁移 | 加载时给缺少 `id` 的服务器补一个并落盘，同时把 `[{ name, value }]` 形式的 env/header 列表归一化为映射——否则按 id 的 API 会 404、数组形式的 env 会被静默丢弃 |
 | MCP 传输（HTTP） | Streamable HTTP（POST JSON-RPC、`Mcp-Session-Id`、SSE/JSON 双格式响应），并在服务器拒绝普通 POST 时自动降级到旧式 HTTP-with-SSE 会话传输（GET 流给出 POST 端点、响应经该流异步回传）；每次请求合并自定义 `headers`/`headerEnv` |
 | 断线重连 | 连接失败按指数退避重试（3s → 6s → 12s … 上限 60s，成功即重置）；SSE 会话的流一旦断开立即重连，在途调用快速失败而不是阻塞到超时 |
@@ -119,10 +124,10 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 发行版不可变且带 tag，消费者可以固定到某个版本：
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.12.0
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.13.0
 ```
 
-DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.11.0 发行 = `1d1bb9c3851db3aefb7dd6c54a9a9dda4e4c8781`；每次推送后由商城重新固定最新发行版）。
+DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.12.0 发行 = `b029407ca3d258e83abac6c06ff94f92e5687164`；每次推送后由商城重新固定最新发行版）。
 
 目前已验证与尚未验证的边界：
 
@@ -136,6 +141,10 @@ DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.
 
 0.12.0 的无鉴权模式由基于 stub context 的 `apply()` API 测试（本地无鉴权 stub 会记录每次请求的 `Authorization` 头）与 client-locale 测试覆盖；尚未在真实 Profile 中实测。
 
+0.13.0 的 HTTP-with-SSE 传输、其重连退避路径与按工具的并发安全标记，由 `test/sse-basic.test.js`、`test/sse-reconnect.test.js` 与 `test/concurrency-safety.test.js` 覆盖。
+
+0.13.0 的发现链、手动 `clientId`/`clientSecretEnv`/`scope`、不支持 DCR 时的报错、日志脱敏与 stdio stderr 尾部，由 `test/oauth-discovery.test.js` 覆盖：它用本地 stub 服务器复刻 GitHub MCP 的拓扑（401 + `resource_metadata` 指针、带路径的授权服务器、无 `registration_endpoint`），并跑真实的 `apply()` API；折叠错误摘要与按需加载的日志面板由 `test/client-language.test.js` 覆盖。**真实 GitHub OAuth 往返未验证**——它需要注册 GitHub OAuth App，本仓库用 stub 代替该授权服务器。手动 Client ID 路径也尚未在真实 Profile 中实测。
+
 下一个门禁：真实 Profile 的回读（解析出的版本、运行进程、设置 → MCP 页面可见），以及在分发场景下对已打 tag 产物的免登录回读。在这些证据补齐之前，兼容性声明只代表一次性 Profile 的验证结果，**不代表**你的实际安装已被验证；DSH STORE 的上架状态同理。
 
 ## 已知限制
@@ -144,7 +153,9 @@ DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.
 - 按需过滤目前只支持 DSH 默认的 `native` 工具呈现模式。使用 `code` 或 `both` 的 agent 会保留完整 MCP 目录，避免生成式 SDK 不完整或误拦截 Code Mode 子调用。
 - OAuth token 明文存于 `~/.dsh` 下的 JSON 文件——请当作机密对待。静态 token 与 `headerEnv` 的值从环境变量读取，不落盘。工作区 OAuth token 也存于同一状态文件，不写进工作区的 `mcp.json`。
 - stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下整条命令行交给 `cmd.exe`，`&`、`|`、`>`、`%VAR%` 等会被 shell 解释——命令与含空格的参数会被自动加引号（已加引号的原样保留），但仍建议使用绝对路径。
-- 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册。
+- 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册。手动配置的 Client ID 永远不会被重新注册——其重定向 URI 必须已在提供方白名单里，因此 GUI 换 origin 会表现为提供方侧的重定向错误，而不是自动修复。
+- 尝试日志位于 host 内存：浏览器刷新仍在，DSH 重启后丢失，且每服务器上限 20 条。持久记录仍是 DSH 服务端日志（`ctx.logger`）；插件刻意不写日志文件。
+- 手动 OAuth 字段只做了校验，未在此处对真实提供方验证过；客户端认证方式只支持 `client_secret_post`（不支持 `client_secret_basic`）。
 
 ## License
 
