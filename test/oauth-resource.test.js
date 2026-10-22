@@ -8,12 +8,12 @@
  * request without the resource, and refresh tokens are single-use.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, statSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, statSync, readdirSync, rmSync, utimesSync, unlinkSync, renameSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, it } from 'node:test';
+import { after, afterEach, beforeEach, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const scratchHome = mkdtempSync(join(tmpdir(), 'dsh-mm-resource-'));
@@ -28,8 +28,13 @@ const fixture = fileURLToPath(new URL('../test-fixtures/restart-connect.mjs', im
 
 const { apply } = await import('../lib/index.js');
 
+const testDisposers = [];
+beforeEach(() => writeFileSync(statePath, JSON.stringify({ servers: [] })));
+afterEach(() => { for (const dispose of testDisposers.splice(0).reverse()) dispose(); });
 function makeCtx(config) {
   const routes = [];
+  const cleanup = [];
+  const effect = fn => { const dispose = fn(); if (typeof dispose === 'function') cleanup.push(dispose); return () => {}; };
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
     tools: { guard: () => () => {}, register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
@@ -41,15 +46,17 @@ function makeCtx(config) {
         callback({
           webServer: ctx.webServer,
           get: () => undefined,
-          effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose(); }; },
+          effect,
         });
       }
       return { dispose: () => {} };
     },
-    effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose(); }; },
+    effect,
   };
   apply(ctx, config);
-  return { routes, handler: routes[0]?.handler };
+  const dispose = () => { for (const fn of cleanup.splice(0).reverse()) fn(); };
+  testDisposers.push(dispose);
+  return { routes, handler: routes[0]?.handler, dispose };
 }
 
 async function request(handler, method, path, body, headers = {}) {
@@ -79,7 +86,7 @@ const state = () => JSON.parse(readFileSync(statePath, 'utf8'));
  * single-use refresh rotation, and an MCP endpoint that only accepts the live
  * access token.
  */
-function startStub({ publishResource = true, refreshMode = 'rotate', refreshDelayMs = 0 } = {}) {
+function startStub({ publishResource = true, refreshMode = 'rotate', refreshDelayMs = 0, beforeRefreshReply = () => {} } = {}) {
   const seen = [];
   const tokenForms = [];
   const registerBodies = [];
@@ -156,6 +163,7 @@ function startStub({ publishResource = true, refreshMode = 'rotate', refreshDela
             const refresh = `refresh-${issued}`;
             validAccess.add(access);
             currentRefresh = refresh;
+            beforeRefreshReply();
             return send(200, { access_token: access, refresh_token: refresh, token_type: 'Bearer', expires_in: 28800 });
           };
           if (refreshDelayMs) return setTimeout(reply, refreshDelayMs);
@@ -587,4 +595,223 @@ it('writes the token file atomically with mode 0600 and leaves no temp files', a
   const leftovers = readdirSync(join(scratchHome, '.dsh')).filter((name) => name.includes('.tmp'));
   assert.deepEqual(leftovers, [], 'no half-written temp file may survive a save');
   assert.equal(serverNamed('atomic').oauth.tokens.access_token, 'access-1');
+});
+
+// Review regressions: independent process views share only the persisted state.
+function seedServer(stub, name, { enabled = false, expires = Date.now() + 3600_000 } = {}) {
+  return { id: name, name, type: 'http', url: stub.mcpUrl, authMode: 'oauth', enabled,
+    oauth: { clientId: 'dcr-client', resourceMetadataUrl: `${stub.base}/.well-known/oauth-protected-resource/mcp`,
+      authorizationServer: stub.base, resource: stub.resource,
+      tokens: { access_token: 'access-old', refresh_token: 'refresh-old', expires_at: expires } } };
+}
+
+it('review: IPv6 loopback with port remains a valid OAuth callback origin', async t => {
+  const stub = await startStub(); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'ipv6')] });
+  const { handler } = makeCtx();
+  const auth = await request(handler, 'POST', '/mcp-manager/api/servers/ipv6/auth', undefined, { host: '[::1]:3080' });
+  assert.equal(auth.code, 200, auth.text);
+  assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('redirect_uri'), 'http://[::1]:3080/mcp-manager/callback/ipv6');
+});
+
+it('review: expired disk access token still supplies the newest single-use refresh token', async t => {
+  const stub = await startStub(); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'expired-disk')] });
+  const { handler } = makeCtx();
+  stub.mint('access-new', 'refresh-new');
+  const fresh = state();
+  fresh.servers[0].oauth.tokens = { access_token: 'access-new', refresh_token: 'refresh-new', expires_at: Date.now() - 1000 };
+  writeState(fresh);
+  await request(handler, 'POST', '/mcp-manager/api/servers/expired-disk/enabled', { enabled: true });
+  assert.deepEqual(refreshForms(stub).map(form => form.get('refresh_token')), ['refresh-new']);
+  assert.equal(serverNamed('expired-disk').oauth.tokens.refresh_token, 'refresh-1');
+  assert.equal(serverNamed('expired-disk').oauth.needsReauth, false);
+});
+
+it('review: refreshing B preserves another process refreshed A and unknown settings', async t => {
+  const a = await startStub(); const b = await startStub();
+  t.after(() => a.close()); t.after(() => b.close());
+  writeState({ servers: [seedServer(a, 'a'), seedServer(b, 'b')], futureSetting: { preserved: true } });
+  const { handler } = makeCtx();
+  const fresh = state();
+  fresh.servers[0].oauth.tokens.refresh_token = 'a-rotated';
+  fresh.futureSetting.remote = 'new';
+  writeState(fresh); b.mint('access-old', 'refresh-old'); b.invalidate();
+  await request(handler, 'POST', '/mcp-manager/api/servers/b/enabled', { enabled: true });
+  assert.equal(serverNamed('b').oauth.tokens.refresh_token, 'refresh-1');
+  assert.equal(serverNamed('a').oauth.tokens.refresh_token, 'a-rotated');
+  assert.equal(state().futureSetting.remote, 'new');
+});
+
+it('review: a settings save cannot restore a stale token pair', async t => {
+  const stub = await startStub(); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'config')] });
+  const { handler } = makeCtx();
+  const fresh = state(); fresh.servers[0].oauth.tokens.refresh_token = 'rotated'; writeState(fresh);
+  const result = await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true });
+  assert.equal(result.code, 200, result.text);
+  assert.equal(serverNamed('config').oauth.tokens.refresh_token, 'rotated');
+});
+
+it('review: a persisted permanent error prevents another process replaying its token', async t => {
+  const stub = await startStub({ refreshMode: 'invalid_grant' }); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'reauth')] });
+  const { handler } = makeCtx();
+  const fresh = state(); fresh.servers[0].oauth.needsReauth = true; fresh.servers[0].oauth.lastRefreshError = 'invalid_grant'; writeState(fresh);
+  await request(handler, 'POST', '/mcp-manager/api/servers/reauth/enabled', { enabled: true });
+  assert.equal(refreshForms(stub).length, 0);
+  const view = (await request(handler, 'GET', '/mcp-manager/api/servers')).json.servers[0];
+  assert.equal(view.status, 'needs-auth');
+});
+
+async function untilReview(predicate, timeout = 3000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
+  assert.ok(predicate(), 'review condition timed out');
+}
+
+it('review: two fresh processes consume a shared refresh token only once', async t => {
+  const stub = await startStub({ refreshDelayMs: 200 }); t.after(() => stub.close());
+  const server = seedServer(stub, 'two-processes', { expires: Date.now() - 1000 });
+  writeState({ servers: [server] }); stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  const results = await Promise.all([runRestartProbe(server.id), runRestartProbe(server.id)]);
+  for (const result of results) {
+    assert.equal(result.status, 0, result.stderr);
+    const verdict = JSON.parse(result.stdout.trim().split('\n').at(-1));
+    assert.equal(verdict.code, 200, verdict.body);
+    assert.equal(JSON.parse(verdict.body).server.oauth.needsReauth, false);
+  }
+  assert.equal(refreshForms(stub).length, 1);
+  assert.equal(serverNamed(server.name).oauth.tokens.refresh_token, 'refresh-1');
+});
+
+it('review: two fresh processes refreshing different servers keep both rotated pairs', async t => {
+  const a = await startStub({ refreshDelayMs: 200 }); const b = await startStub({ refreshDelayMs: 200 });
+  t.after(() => a.close()); t.after(() => b.close());
+  writeState({ servers: [seedServer(a, 'process-a'), seedServer(b, 'process-b')] });
+  a.mint('access-old', 'refresh-old'); a.invalidate(); b.mint('access-old', 'refresh-old'); b.invalidate();
+  const results = await Promise.all([runRestartProbe('process-a'), runRestartProbe('process-b')]);
+  for (const result of results) assert.equal(result.status, 0, result.stderr);
+  assert.equal(serverNamed('process-a').oauth.tokens.refresh_token, 'refresh-1');
+  assert.equal(serverNamed('process-b').oauth.tokens.refresh_token, 'refresh-1');
+  assert.equal(refreshForms(a).length, 1); assert.equal(refreshForms(b).length, 1);
+});
+
+it('review: a concurrent settings writer waits for refresh and preserves workspace tokens', async t => {
+  const stub = await startStub({ refreshDelayMs: 250 }); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'locked')], workspaceTokens: { '/scratch\nws': { oauth: { tokens: { refresh_token: 'ws-old' } } } } });
+  const refreshing = makeCtx(); const settings = makeCtx();
+  stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  const pending = request(refreshing.handler, 'POST', '/mcp-manager/api/servers/locked/connect');
+  await untilReview(() => refreshForms(stub).length === 1);
+  let settled = false;
+  const saving = request(settings.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true }).then(result => { settled = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(settled, false, 'config save must share the refresh lock');
+  await pending; assert.equal((await saving).code, 200);
+  assert.equal(serverNamed('locked').oauth.tokens.refresh_token, 'refresh-1');
+  assert.equal(state().workspaceTokens['/scratch\nws'].oauth.tokens.refresh_token, 'ws-old');
+  assert.equal(state().onDemandToolInjection, true);
+});
+
+for (const action of ['disable', 'delete', 'unload']) {
+  it(`review: startup restore does not resurrect a server after ${action}`, async t => {
+    const stub = await startStub(); t.after(() => stub.close());
+    const server = seedServer(stub, 'startup', { enabled: true });
+    writeState({ servers: [server] }); stub.mint('access-old', 'refresh-old');
+    const h = makeCtx();
+    await untilReview(() => stub.seen.some(path => path === 'POST /mcp'));
+    // Await the initial connect so this isolates the new delayed loop rather
+    // than the pre-existing in-flight global-connect lifecycle behavior.
+    await untilReview(() => stub.seen.filter(path => path === 'POST /mcp').length >= 3);
+    if (action === 'disable') await request(h.handler, 'POST', '/mcp-manager/api/servers/startup/enabled', { enabled: false });
+    if (action === 'delete') await request(h.handler, 'DELETE', '/mcp-manager/api/servers/startup');
+    if (action === 'unload') h.dispose();
+    const count = stub.seen.filter(path => path === 'POST /mcp').length;
+    await new Promise(resolve => setTimeout(resolve, 1700));
+    assert.equal(stub.seen.filter(path => path === 'POST /mcp').length, count);
+  });
+}
+
+it('review: adopting a remote pair rebases later settings writes', async t => {
+  const stub = await startStub(); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'rebase')] });
+  const h = makeCtx();
+  stub.mint('access-n', 'refresh-n');
+  const fresh = state(); fresh.servers[0].oauth.tokens = { access_token: 'access-n', refresh_token: 'refresh-n', expires_at: Date.now() + 3600_000 }; writeState(fresh);
+  await request(h.handler, 'POST', '/mcp-manager/api/servers/rebase/connect');
+  const later = state(); later.servers[0].oauth.tokens = { access_token: 'access-m', refresh_token: 'refresh-m', expires_at: Date.now() + 3600_000 }; writeState(later);
+  assert.equal((await request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true })).code, 200);
+  assert.equal(serverNamed('rebase').oauth.tokens.refresh_token, 'refresh-m');
+});
+
+
+it('review: an empty stale lock is reclaimable after interrupted creation', async () => {
+  const lock = `${statePath}.refresh.lock`;
+  writeFileSync(lock, ''); utimesSync(lock, new Date(0), new Date(0));
+  const { handler } = makeCtx();
+  const result = await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true });
+  assert.equal(result.code, 200, result.text);
+  assert.equal(state().onDemandToolInjection, true);
+  assert.ok(!readdirSync(join(scratchHome, '.dsh')).includes('mcp-manager.json.refresh.lock'));
+});
+
+it('review: an aged lock held by a live owner is never stolen', async () => {
+  const lock = `${statePath}.refresh.lock`;
+  writeFileSync(lock, `${process.pid}\nowned`); utimesSync(lock, new Date(0), new Date(0));
+  const { handler } = makeCtx();
+  let settled = false;
+  const pending = request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true }).then(result => { settled = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(settled, false);
+  assert.equal(readFileSync(lock, 'utf8'), `${process.pid}\nowned`);
+  unlinkSync(lock);
+  assert.equal((await pending).code, 200);
+});
+
+it('review: a failed rotation save never restores and replays the spent disk pair', async t => {
+  const backup = `${statePath}.backup`;
+  let failOnce = true;
+  const stub = await startStub({ beforeRefreshReply() {
+    if (!failOnce) return;
+    failOnce = false;
+    renameSync(statePath, backup); mkdirSync(statePath);
+  } }); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'unsaved')] });
+  const h = makeCtx(); stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/connect');
+  rmSync(statePath, { recursive: true }); renameSync(backup, statePath);
+  stub.invalidate();
+  await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/connect');
+  await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/connect');
+  assert.deepEqual(refreshForms(stub).map(form => form.get('refresh_token')), ['refresh-old']);
+});
+
+
+it('review: simultaneous stale-lock reclaimers retain one refresh transaction', async t => {
+  const stub = await startStub({ refreshDelayMs: 150 }); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'reclaim-race', { expires: Date.now() - 1000 })] });
+  stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  const lock = `${statePath}.refresh.lock`;
+  writeFileSync(lock, ''); utimesSync(lock, new Date(0), new Date(0));
+  const results = await Promise.all(Array.from({ length: 4 }, () => runRestartProbe('reclaim-race')));
+  for (const result of results) assert.equal(result.status, 0, result.stderr);
+  assert.equal(refreshForms(stub).length, 1);
+  assert.equal(serverNamed('reclaim-race').oauth.tokens.refresh_token, 'refresh-1');
+  assert.ok(!readdirSync(join(scratchHome, '.dsh')).some(name => name.endsWith('.lock') || name.endsWith('.reclaim')));
+});
+
+it('review: an orphaned reclaimer guard fails closed until operator recovery', async () => {
+  const lock = `${statePath}.refresh.lock`;
+  const guard = `${lock}.reclaim`;
+  writeFileSync(lock, ''); utimesSync(lock, new Date(0), new Date(0));
+  writeFileSync(guard, ''); utimesSync(guard, new Date(0), new Date(0));
+  const { handler } = makeCtx();
+  let settled = false;
+  const pending = request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true }).then(result => { settled = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(settled, false);
+  assert.equal(readFileSync(lock, 'utf8'), '');
+  unlinkSync(guard);
+  assert.equal((await pending).code, 200);
 });
