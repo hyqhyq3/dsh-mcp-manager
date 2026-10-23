@@ -105,6 +105,14 @@ it('renders the injected t and follows locale changes without plugin language re
   assert.equal(form.props.t('save'), 'seat:save');
 });
 
+it('explains the full-catalog Code/PTC fallback in both locales', () => {
+  const app = mount(async () => response({}));
+  assert.match(text(app.render()), /Code\/PTC\/both keeps the full MCP catalog/);
+  app.setLocale('zh');
+  assert.match(text(app.render()), /Code\/PTC\/both 模式保留完整 MCP 目录/);
+  app.dispose();
+});
+
 it('renders English list, add form, and stdio fields using the same translator', async () => {
   const app = mount(async () => response({}));
   let tree = app.render();
