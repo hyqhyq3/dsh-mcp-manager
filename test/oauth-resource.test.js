@@ -267,11 +267,11 @@ it('refreshes with the resource, rotates the refresh token, and reuses the rotat
   assert.equal(refreshTwo[1].get('refresh_token'), 'refresh-2', 'only the rotated token may be replayed');
   assert.equal(state().servers.find((s) => s.name === 'kc2').oauth.tokens.refresh_token, 'refresh-3');
 
-  // A replayed old token is refused by the stub — rotation really happened.
+  // A stale, no-longer-current refresh token is refused by the stub — rotation really happened.
   const replay = await fetch(`${stub.base}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'refresh-1', client_id: 'dcr-client', resource: stub.resource }),
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'example-stale-refresh', client_id: 'dcr-client', resource: stub.resource }),
   });
   assert.equal(replay.status, 400);
 
@@ -606,10 +606,10 @@ it('adopts a pair another process refreshed instead of sending the spent token',
   // the expired refresh token again.
   expireSavedPair('adopt');
   const { handler: staleHandler } = makeCtx();
-  stub.mint('access-other', 'refresh-other');
+  stub.mint('example-access-other', 'example-refresh-other');
   const st = state();
   st.servers.find((server) => server.name === 'adopt').oauth.tokens = {
-    access_token: 'access-other', refresh_token: 'refresh-other', expires_at: Date.now() + 3600_000,
+    access_token: 'example-access-other', refresh_token: 'example-refresh-other', expires_at: Date.now() + 3600_000,
   };
   writeState(st);
 
@@ -617,7 +617,7 @@ it('adopts a pair another process refreshed instead of sending the spent token',
   const connected = await request(staleHandler, 'POST', `/mcp-manager/api/servers/${id}/connect`);
   assert.equal(connected.code, 200, connected.text);
   assert.equal(refreshForms(stub).length, before, 'the fresh pair must be adopted without another refresh');
-  assert.equal(serverNamed('adopt').oauth.tokens.refresh_token, 'refresh-other');
+  assert.equal(serverNamed('adopt').oauth.tokens.refresh_token, 'example-refresh-other');
 });
 
 it('keeps the pair and retries after a transient token-endpoint failure', async (t) => {
@@ -657,7 +657,7 @@ function seedServer(stub, name, { enabled = false, expires = Date.now() + 3600_0
   return { id: name, name, type: 'http', url: stub.mcpUrl, authMode: 'oauth', enabled,
     oauth: { clientId: 'dcr-client', resourceMetadataUrl: `${stub.base}/.well-known/oauth-protected-resource/mcp`,
       authorizationServer: stub.base, resource: stub.resource,
-      tokens: { access_token: 'access-old', refresh_token: 'refresh-old', expires_at: expires } } };
+      tokens: { access_token: 'example-access-old', refresh_token: 'example-refresh-old', expires_at: expires } } };
 }
 
 it('review: IPv6 loopback with port remains a valid OAuth callback origin', async t => {
@@ -673,12 +673,12 @@ it('review: expired disk access token still supplies the newest single-use refre
   const stub = await startStub(); t.after(() => stub.close());
   writeState({ servers: [seedServer(stub, 'expired-disk')] });
   const { handler } = makeCtx();
-  stub.mint('access-new', 'refresh-new');
+  stub.mint('example-access-new', 'example-refresh-new');
   const fresh = state();
-  fresh.servers[0].oauth.tokens = { access_token: 'access-new', refresh_token: 'refresh-new', expires_at: Date.now() - 1000 };
+  fresh.servers[0].oauth.tokens = { access_token: 'example-access-new', refresh_token: 'example-refresh-new', expires_at: Date.now() - 1000 };
   writeState(fresh);
   await request(handler, 'POST', '/mcp-manager/api/servers/expired-disk/enabled', { enabled: true });
-  assert.deepEqual(refreshForms(stub).map(form => form.get('refresh_token')), ['refresh-new']);
+  assert.deepEqual(refreshForms(stub).map(form => form.get('refresh_token')), ['example-refresh-new']);
   assert.equal(serverNamed('expired-disk').oauth.tokens.refresh_token, 'refresh-1');
   assert.equal(serverNamed('expired-disk').oauth.needsReauth, false);
 });
@@ -689,12 +689,12 @@ it('review: refreshing B preserves another process refreshed A and unknown setti
   writeState({ servers: [seedServer(a, 'a'), seedServer(b, 'b')], futureSetting: { preserved: true } });
   const { handler } = makeCtx();
   const fresh = state();
-  fresh.servers[0].oauth.tokens.refresh_token = 'a-rotated';
+  fresh.servers[0].oauth.tokens.refresh_token = 'example-rotated';
   fresh.futureSetting.remote = 'new';
-  writeState(fresh); b.mint('access-old', 'refresh-old'); b.invalidate();
+  writeState(fresh); b.mint('example-access-old', 'example-refresh-old'); b.invalidate();
   await request(handler, 'POST', '/mcp-manager/api/servers/b/enabled', { enabled: true });
   assert.equal(serverNamed('b').oauth.tokens.refresh_token, 'refresh-1');
-  assert.equal(serverNamed('a').oauth.tokens.refresh_token, 'a-rotated');
+  assert.equal(serverNamed('a').oauth.tokens.refresh_token, 'example-rotated');
   assert.equal(state().futureSetting.remote, 'new');
 });
 
@@ -728,7 +728,7 @@ async function untilReview(predicate, timeout = 3000) {
 it('review: two fresh processes consume a shared refresh token only once', async t => {
   const stub = await startStub({ refreshDelayMs: 200 }); t.after(() => stub.close());
   const server = seedServer(stub, 'two-processes', { expires: Date.now() - 1000 });
-  writeState({ servers: [server] }); stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  writeState({ servers: [server] }); stub.mint('example-access-old', 'example-refresh-old'); stub.invalidate();
   const results = await Promise.all([runRestartProbe(server.id), runRestartProbe(server.id)]);
   for (const result of results) {
     assert.equal(result.status, 0, result.stderr);
@@ -744,7 +744,7 @@ it('review: two fresh processes refreshing different servers keep both rotated p
   const a = await startStub({ refreshDelayMs: 200 }); const b = await startStub({ refreshDelayMs: 200 });
   t.after(() => a.close()); t.after(() => b.close());
   writeState({ servers: [seedServer(a, 'process-a'), seedServer(b, 'process-b')] });
-  a.mint('access-old', 'refresh-old'); a.invalidate(); b.mint('access-old', 'refresh-old'); b.invalidate();
+  a.mint('example-access-old', 'example-refresh-old'); a.invalidate(); b.mint('example-access-old', 'example-refresh-old'); b.invalidate();
   const results = await Promise.all([runRestartProbe('process-a'), runRestartProbe('process-b')]);
   for (const result of results) assert.equal(result.status, 0, result.stderr);
   assert.equal(serverNamed('process-a').oauth.tokens.refresh_token, 'refresh-1');
@@ -756,7 +756,7 @@ it('review: a concurrent settings writer waits for refresh and preserves workspa
   const stub = await startStub({ refreshDelayMs: 250 }); t.after(() => stub.close());
   writeState({ servers: [seedServer(stub, 'locked')], workspaceTokens: { '/scratch\nws': { oauth: { tokens: { refresh_token: 'ws-old' } } } } });
   const refreshing = makeCtx(); const settings = makeCtx();
-  stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  stub.mint('example-access-old', 'example-refresh-old'); stub.invalidate();
   const pending = request(refreshing.handler, 'POST', '/mcp-manager/api/servers/locked/enabled', { enabled: true });
   await untilReview(() => refreshForms(stub).length === 1);
   let settled = false;
@@ -773,7 +773,7 @@ for (const action of ['disable', 'delete', 'unload']) {
   it(`review: startup restore does not resurrect a server after ${action}`, async t => {
     const stub = await startStub(); t.after(() => stub.close());
     const server = seedServer(stub, 'startup', { enabled: true });
-    writeState({ servers: [server] }); stub.mint('access-old', 'refresh-old');
+    writeState({ servers: [server] }); stub.mint('example-access-old', 'example-refresh-old');
     const h = makeCtx();
     await untilReview(() => stub.seen.some(path => path === 'POST /mcp'));
     // Await the initial connect here; dedicated in-flight tests cover
@@ -792,12 +792,12 @@ it('review: adopting a remote pair rebases later settings writes', async t => {
   const stub = await startStub(); t.after(() => stub.close());
   writeState({ servers: [seedServer(stub, 'rebase')] });
   const h = makeCtx();
-  stub.mint('access-n', 'refresh-n');
-  const fresh = state(); fresh.servers[0].oauth.tokens = { access_token: 'access-n', refresh_token: 'refresh-n', expires_at: Date.now() + 3600_000 }; writeState(fresh);
+  stub.mint('example-access-n', 'example-refresh-n');
+  const fresh = state(); fresh.servers[0].oauth.tokens = { access_token: 'example-access-n', refresh_token: 'example-refresh-n', expires_at: Date.now() + 3600_000 }; writeState(fresh);
   await request(h.handler, 'POST', '/mcp-manager/api/servers/rebase/enabled', { enabled: true });
-  const later = state(); later.servers[0].oauth.tokens = { access_token: 'access-m', refresh_token: 'refresh-m', expires_at: Date.now() + 3600_000 }; writeState(later);
+  const later = state(); later.servers[0].oauth.tokens = { access_token: 'example-access-m', refresh_token: 'example-refresh-m', expires_at: Date.now() + 3600_000 }; writeState(later);
   assert.equal((await request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true })).code, 200);
-  assert.equal(serverNamed('rebase').oauth.tokens.refresh_token, 'refresh-m');
+  assert.equal(serverNamed('rebase').oauth.tokens.refresh_token, 'example-refresh-m');
 });
 
 
@@ -833,20 +833,20 @@ it('review: a failed rotation save never restores and replays the spent disk pai
     renameSync(statePath, backup); mkdirSync(statePath);
   } }); t.after(() => stub.close());
   writeState({ servers: [seedServer(stub, 'unsaved')] });
-  const h = makeCtx(); stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  const h = makeCtx(); stub.mint('example-access-old', 'example-refresh-old'); stub.invalidate();
   await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/enabled', { enabled: true });
   rmSync(statePath, { recursive: true }); renameSync(backup, statePath);
   stub.invalidate();
   await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/connect');
   await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/connect');
-  assert.deepEqual(refreshForms(stub).map(form => form.get('refresh_token')), ['refresh-old']);
+  assert.deepEqual(refreshForms(stub).map(form => form.get('refresh_token')), ['example-refresh-old']);
 });
 
 
 it('review: simultaneous stale-lock reclaimers retain one refresh transaction', async t => {
   const stub = await startStub({ refreshDelayMs: 150 }); t.after(() => stub.close());
   writeState({ servers: [seedServer(stub, 'reclaim-race', { expires: Date.now() - 1000 })] });
-  stub.mint('access-old', 'refresh-old'); stub.invalidate();
+  stub.mint('example-access-old', 'example-refresh-old'); stub.invalidate();
   const lock = `${statePath}.refresh.lock`;
   writeFileSync(lock, ''); utimesSync(lock, new Date(0), new Date(0));
   const results = await Promise.all(Array.from({ length: 4 }, () => runRestartProbe('reclaim-race')));
@@ -889,7 +889,7 @@ it('premerge: queued state writes preserve same-process invocation order', async
 it('premerge: retrying disable after lock timeout persists the requested state', async t => {
   const stub = await startStub(); t.after(() => stub.close());
   writeState({ servers: [seedServer(stub, 'disable-timeout', { enabled: true })] });
-  stub.mint('access-old', 'refresh-old');
+  stub.mint('example-access-old', 'example-refresh-old');
   const h = makeCtx();
   await untilReview(() => stub.seen.filter(path => path === 'POST /mcp').length >= 3);
   const lock = `${statePath}.refresh.lock`;

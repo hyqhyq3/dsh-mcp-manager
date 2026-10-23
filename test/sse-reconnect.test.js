@@ -18,7 +18,7 @@ process.env.USERPROFILE = SCRATCH_HOME;
 process.env.DSH_HOME = SCRATCH_HOME;
 mkdirSync(join(SCRATCH_HOME, '.dsh'), { recursive: true });
 
-const TOKEN = 'sse-life-token';
+const TOKEN = 'sse-life-token-example';
 
 /** SSE server whose tools/call is answered unless told to hold it. */
 function startSseServer({ holdCalls = false } = {}) {

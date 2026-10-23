@@ -30,7 +30,13 @@ export function apply(ctx) {
   let registrations = 0;
   let exchanges = 0;
   let refreshes = 0;
-  let liveToken = 'synthetic-access';
+  // Synthetic fixture values used by the local stub authorization server below.
+  const syntheticAccess='synthetic-access';
+  const syntheticRefresh='synthetic-refresh';
+  const syntheticRefreshedAccess='synthetic-refreshed-access';
+  const syntheticRotatedRefresh='synthetic-rotated-refresh';
+  const syntheticExpiredAccess='synthetic-expired-access';
+  let liveBearer = syntheticAccess;
   const methods = [];
   let authUrl;
   let redirect;
@@ -57,8 +63,8 @@ export function apply(ctx) {
         assert.equal(form.get('client_id'),'synthetic-manual-client');
         assert.equal(form.get('refresh_token'),'synthetic-refresh');
         assert.equal(form.get('resource'),base+'/mcp');
-        liveToken='synthetic-refreshed-access';
-        return send(200,{access_token:liveToken,refresh_token:'synthetic-rotated-refresh',expires_in:3600,token_type:'Bearer'});
+        liveBearer=syntheticRefreshedAccess;
+        return send(200,{access_token:liveBearer,refresh_token:syntheticRotatedRefresh,expires_in:3600,token_type:'Bearer'});
        }
        exchanges++;
        assert.equal(form.get('grant_type'),'authorization_code');
@@ -68,10 +74,10 @@ export function apply(ctx) {
        assert.equal(form.get('resource'),base+'/mcp');
        assert.equal(form.get('client_secret'),null);
        assert.equal(createHash('sha256').update(form.get('code_verifier')).digest('base64url'),authUrl.searchParams.get('code_challenge'));
-       return send(200,{access_token:'synthetic-access',refresh_token:'synthetic-refresh',expires_in:3600,token_type:'Bearer'});
+       return send(200,{access_token:syntheticAccess,refresh_token:syntheticRefresh,expires_in:3600,token_type:'Bearer'});
       }
       if(req.url==='/mcp') {
-       if(req.headers.authorization!=='Bearer '+liveToken) return send(401,{error:'unauthorized'},{'WWW-Authenticate':'Bearer resource_metadata="'+base+'/.well-known/oauth-protected-resource/mcp"'});
+       if(req.headers.authorization!=='Bearer '+liveBearer) return send(401,{error:'unauthorized'},{'WWW-Authenticate':'Bearer resource_metadata="'+base+'/.well-known/oauth-protected-resource/mcp"'});
        const msg=JSON.parse(raw||'{}');
        methods.push(msg.method);
        if(msg.id===undefined) return send(202,'');
@@ -129,7 +135,7 @@ export function apply(ctx) {
     const manualCallback=await fetch(redirect+'?code=synthetic-code&state='+authUrl.searchParams.get('state'));
     assert.match(await manualCallback.text(),/Authorized/);
     assert.equal(registrations,1,'manual clients must skip dynamic registration');
-    liveToken='synthetic-expired-access';
+    liveBearer=syntheticExpiredAccess;
     const manualReconnect=await fetch(api+'/servers/'+manualId+'/connect',{method:'POST'});
     assert.equal(manualReconnect.status,200);
     const manualView=(await manualReconnect.json()).server;

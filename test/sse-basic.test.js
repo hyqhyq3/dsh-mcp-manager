@@ -16,7 +16,7 @@ process.env.USERPROFILE = SCRATCH_HOME;
 process.env.DSH_HOME = SCRATCH_HOME;
 mkdirSync(join(SCRATCH_HOME, '.dsh'), { recursive: true });
 
-const TOKEN = 'sse-transport-token';
+const TOKEN = 'sse-transport-token-example';
 
 /** Minimal HTTP-with-SSE server, mirroring BurpMCP-Ultra's observable behavior. */
 function startSseServer({ holdCalls = false, protocolVersion = '2025-03-26' } = {}) {
@@ -183,7 +183,7 @@ describe('HTTP-with-SSE transport', () => {
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     t.after(() => new Promise((resolve) => server.close(resolve)));
 
-    const { registered, dispose } = await loadWith({ name: 'httpSrv', type: 'http', url: `http://127.0.0.1:${server.address().port}/`, authMode: 'static', staticToken: 'anything' });
+    const { registered, dispose } = await loadWith({ name: 'httpSrv', type: 'http', url: `http://127.0.0.1:${server.address().port}/`, authMode: 'static', staticToken: 'example-static-token' });
     t.after(dispose);
 
     assert.equal(await waitFor(() => registered.has('mcp__httpSrv__http_tool')), true, 'the Streamable HTTP path must stay intact');

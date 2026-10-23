@@ -93,7 +93,7 @@ function startStub({ advertiseRegistration = false, tokenBody = null, requiredAp
       const base = `http://127.0.0.1:${server.address().port}`;
 
       if (req.url === '/mcp') {
-        if (requiredApplicationType && req.headers.authorization === 'Bearer stub-access-token') {
+        if (requiredApplicationType && req.headers.authorization === 'Bearer example-access-token') {
           const message = JSON.parse(raw || '{}');
           if (message.id === undefined) return send(202, '');
           const result = message.method === 'initialize'
@@ -134,7 +134,7 @@ function startStub({ advertiseRegistration = false, tokenBody = null, requiredAp
       if (req.url === '/login/oauth/access_token') {
         forms.push(new URLSearchParams(raw));
         if (tokenBody) return send(400, tokenBody);
-        return send(200, { access_token: 'stub-access-token', refresh_token: 'stub-refresh-token', token_type: 'bearer', expires_in: 3600 });
+        return send(200, { access_token: 'example-access-token', refresh_token: 'example-refresh-token', token_type: 'bearer', expires_in: 3600 });
       }
       return send(404, { error: 'not found' });
     });
@@ -321,7 +321,7 @@ it('explains an AS without dynamic registration instead of reporting a bare HTTP
 it('sends client_secret only when its environment variable resolves', async () => {
   const stub = await startStub();
   const { handler } = makeCtx();
-  process.env.DSH_MM_TEST_SECRET = 'top-secret-value';
+  process.env.DSH_MM_TEST_SECRET = 'example-secret';
   const created = await request(handler, 'POST', '/mcp-manager/api/servers', {
     name: 'secret', type: 'http', url: stub.mcpUrl, authMode: 'oauth', clientId: 'secret-client', clientSecretEnv: 'DSH_MM_TEST_SECRET',
   });
@@ -333,11 +333,11 @@ it('sends client_secret only when its environment variable resolves', async () =
   const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=stub-code&state=${flowState}`);
   const exchanges = stub.forms.filter(form => form.get('grant_type') === 'authorization_code');
   assert.equal(exchanges.length, 1);
-  assert.equal(exchanges[0].get('client_secret'), 'top-secret-value');
+  assert.equal(exchanges[0].get('client_secret'), 'example-secret');
   assert.equal(exchanges[0].get('client_id'), 'secret-client');
   assert.equal(exchanges[0].get('code_verifier')?.length > 20, true, 'PKCE verifier must be sent');
   assert.match(callback.text, /Authorized/);
-  assert.ok(!callback.text.includes('top-secret-value'), 'the secret must never reach the browser');
+  assert.ok(!callback.text.includes('example-secret'), 'the secret must never reach the browser');
 
   // A configured-but-unset variable fails by name and never leaks a value.
   const second = await request(handler, 'POST', '/mcp-manager/api/servers', {
