@@ -44,6 +44,42 @@ publishing are separate owner decisions and are **not** part of this document.
 重连返回 409 而不会重复注册同名工具；删除或改名占用名称的全局服务器后会重新判定
 冲突并自动连上；`docs/on-demand-code-mode.md` 改为引用上游 Discussion #10485。
 
+## Provider finding: Meta/WhatsApp dynamic registration (issue #21)
+
+Recorded here because the reply to #21 depends on it and it is not a plugin
+defect. Live probes on 2026-10-23 (macOS, curl 8.7.1, Node 26.8.2):
+
+- `GET https://mcp.facebook.com/whatsapp_business_tools/.well-known/oauth-protected-resource/whatsapp_business_tools`
+  → 200, names AS `https://www.facebook.com/whatsapp_business_tools` and scopes
+  `business_management`, `whatsapp_business_management`,
+  `whatsapp_business_messaging`. The bare and path-appended PRM forms 404.
+- AS metadata at `https://www.facebook.com/.well-known/oauth-authorization-server/whatsapp_business_tools`
+  → 200 with `registration_endpoint`
+  `https://mcp.facebook.com/.well-known/register/whatsapp_business_tools`,
+  `token_endpoint_auth_methods_supported: ["none"]`,
+  `code_challenge_methods_supported: ["S256"]`.
+- The advertised `registration_endpoint` is live and issues real clients, but
+  only for an allowlist of `client_name` **substrings** (`codex`, `chatgpt`,
+  `claude`, case-insensitive). The plugin's own
+  `dsh-mcp-manager-${server.name}` is refused with
+  `400 {"error":"invalid_client_metadata","error_description":"Dynamic registration is not available for this client."}`.
+  Holding the name fixed, `application_type` (native/web/absent), `scope` and
+  the loopback port never change the outcome, so the SEP-837 classification
+  does not affect this provider. A non-loopback `redirect_uris` is a separate
+  gate (`invalid_redirect_uri`), and Meta rewrites `localhost` to `127.0.0.1`.
+- Adopting an allowlisted vendor name is **not** shipped: it would impersonate
+  another product's client identity. An invented numeric Client ID does not
+  work either — `authorize` with one redirects to
+  `https://www.facebook.com/oauth/error/` carrying
+  `error_code=PLATFORM__INVALID_APP_ID`, whereas a DCR-issued id reaches the
+  real `https://www.facebook.com/login.php` flow.
+
+Supported path: a Meta app the **user** owns, entered as `clientId` (+ optional
+`clientSecretEnv`, `scope`), with the exact loopback callback registered in that
+app. That path reaches the provider authorize URL with `client_id`, `scope`,
+`resource=<the MCP URL>` and PKCE `S256`; consent and token issuance were not
+exercised.
+
 ## Verification / 验收
 
 - `npm test` on the frozen commit: **159/159 pass, 0 fail, 0 cancelled, 0
