@@ -331,10 +331,11 @@ it('sends client_secret only when its environment variable resolves', async () =
   const flowState = new URL(auth.json.authorizeUrl).searchParams.get('state');
 
   const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=stub-code&state=${flowState}`);
-  assert.equal(stub.forms.length, 1);
-  assert.equal(stub.forms[0].get('client_secret'), 'top-secret-value');
-  assert.equal(stub.forms[0].get('client_id'), 'secret-client');
-  assert.equal(stub.forms[0].get('code_verifier')?.length > 20, true, 'PKCE verifier must be sent');
+  const exchanges = stub.forms.filter(form => form.get('grant_type') === 'authorization_code');
+  assert.equal(exchanges.length, 1);
+  assert.equal(exchanges[0].get('client_secret'), 'top-secret-value');
+  assert.equal(exchanges[0].get('client_id'), 'secret-client');
+  assert.equal(exchanges[0].get('code_verifier')?.length > 20, true, 'PKCE verifier must be sent');
   assert.match(callback.text, /Authorized/);
   assert.ok(!callback.text.includes('top-secret-value'), 'the secret must never reach the browser');
 

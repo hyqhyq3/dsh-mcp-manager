@@ -29,6 +29,8 @@ export function apply(ctx) {
   let owned;
   let registrations = 0;
   let exchanges = 0;
+  let refreshes = 0;
+  let liveToken = 'synthetic-access';
   const methods = [];
   let authUrl;
   let redirect;
@@ -49,19 +51,27 @@ export function apply(ctx) {
        return send(201,{client_id:'synthetic-client',redirect_uris:[redirect]});
       }
       if(req.url==='/token') {
-       exchanges++;
        const form=new URLSearchParams(raw);
+       if(form.get('grant_type')==='refresh_token') {
+        refreshes++;
+        assert.equal(form.get('client_id'),'synthetic-manual-client');
+        assert.equal(form.get('refresh_token'),'synthetic-refresh');
+        assert.equal(form.get('resource'),base+'/mcp');
+        liveToken='synthetic-refreshed-access';
+        return send(200,{access_token:liveToken,refresh_token:'synthetic-rotated-refresh',expires_in:3600,token_type:'Bearer'});
+       }
+       exchanges++;
        assert.equal(form.get('grant_type'),'authorization_code');
        assert.equal(form.get('code'),'synthetic-code');
        assert.equal(form.get('redirect_uri'),redirect);
-       assert.equal(form.get('client_id'),'synthetic-client');
+       assert.equal(form.get('client_id'),exchanges===1?'synthetic-client':'synthetic-manual-client');
        assert.equal(form.get('resource'),base+'/mcp');
        assert.equal(form.get('client_secret'),null);
        assert.equal(createHash('sha256').update(form.get('code_verifier')).digest('base64url'),authUrl.searchParams.get('code_challenge'));
        return send(200,{access_token:'synthetic-access',refresh_token:'synthetic-refresh',expires_in:3600,token_type:'Bearer'});
       }
       if(req.url==='/mcp') {
-       if(req.headers.authorization!=='Bearer synthetic-access') return send(401,{error:'unauthorized'},{'WWW-Authenticate':'Bearer resource_metadata="'+base+'/.well-known/oauth-protected-resource/mcp"'});
+       if(req.headers.authorization!=='Bearer '+liveToken) return send(401,{error:'unauthorized'},{'WWW-Authenticate':'Bearer resource_metadata="'+base+'/.well-known/oauth-protected-resource/mcp"'});
        const msg=JSON.parse(raw||'{}');
        methods.push(msg.method);
        if(msg.id===undefined) return send(202,'');
@@ -108,7 +118,28 @@ export function apply(ctx) {
     const logs=(await (await fetch(api+'/servers/'+id+'/logs')).json()).logs;
     for(const phase of ['register','token-exchange','tools/list']) assert.ok(logs.some(l=>l.phase===phase),phase);
     for(const method of ['initialize','notifications/initialized','tools/list']) assert.ok(methods.includes(method),method);
-    writeFileSync(${JSON.stringify(resultPath)},JSON.stringify({ok:true,dsh:'0.2.1-rc.2',registration:{application_type:'native',requests:registrations},pkce:'S256',exchanges,status:view.status,tool:'mcp__local_oauth__echo',initialized:true,persisted:true,reusedClient:true}));
+    const manualCreated=await fetch(api+'/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'manual_oauth',type:'http',url:'http://127.0.0.1:'+server.address().port+'/mcp',authMode:'oauth',clientId:'synthetic-manual-client'})});
+    assert.equal(manualCreated.status,201);
+    const manualId=(await manualCreated.json()).server.id;
+    const manualAuth=await fetch(api+'/servers/'+manualId+'/auth',{method:'POST'});
+    assert.equal(manualAuth.status,200);
+    authUrl=new URL((await manualAuth.json()).authorizeUrl);
+    redirect=authUrl.searchParams.get('redirect_uri');
+    assert.equal(authUrl.searchParams.get('client_id'),'synthetic-manual-client');
+    const manualCallback=await fetch(redirect+'?code=synthetic-code&state='+authUrl.searchParams.get('state'));
+    assert.match(await manualCallback.text(),/Authorized/);
+    assert.equal(registrations,1,'manual clients must skip dynamic registration');
+    liveToken='synthetic-expired-access';
+    const manualReconnect=await fetch(api+'/servers/'+manualId+'/connect',{method:'POST'});
+    assert.equal(manualReconnect.status,200);
+    const manualView=(await manualReconnect.json()).server;
+    assert.equal(manualView.status,'connected');
+    assert.equal(refreshes,1);
+    const manualPersisted=JSON.parse(readFileSync(join(${JSON.stringify(scratch)},'.dsh','mcp-manager.json'))).servers.find(s=>s.id===manualId);
+    assert.equal(manualPersisted.oauth.tokens.refresh_token,'synthetic-rotated-refresh');
+    assert.equal(manualPersisted.oauth.clientId,undefined);
+    assert.ok(owned.agent.ctx.tools.schemas(owned.agent).some(t=>t.name==='mcp__manual_oauth__echo'));
+    writeFileSync(${JSON.stringify(resultPath)},JSON.stringify({ok:true,dsh:'0.2.1-rc.2',registration:{application_type:'native',requests:registrations},pkce:'S256',exchanges,status:view.status,tool:'mcp__local_oauth__echo',initialized:true,persisted:true,reusedClient:true,manualClient:{refreshes,status:manualView.status,rotated:true}}));
   } catch(error) { writeFileSync(${JSON.stringify(resultPath)},JSON.stringify({ok:false,error:error.stack})); }
   finally { await owned?.dispose();server.closeAllConnections();await new Promise(r=>server.close(r)); }
  })();

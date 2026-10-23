@@ -464,7 +464,8 @@ function expireSavedPair(name) {
 
 async function runRestartProbe(id) {
   return await new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, [fixture, id], {
+    const action = state().servers.find(server => server.id === id)?.enabled === false ? 'enable' : 'connect';
+    const proc = spawn(process.execPath, [fixture, id, action], {
       env: { ...process.env, HOME: scratchHome, USERPROFILE: scratchHome, DSH_HOME: join(scratchHome, '.dsh') },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -475,6 +476,60 @@ async function runRestartProbe(id) {
     proc.on('error', reject);
     const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`restart probe timed out: ${stderr}`)); }, 30_000);
     proc.on('exit', (code) => { clearTimeout(timer); resolve({ status: code, stdout, stderr }); });
+  });
+}
+
+for (const confidential of [false, true]) {
+  it(`refreshes manual OAuth clients through 401 and restart (${confidential ? 'confidential' : 'public'})`, async t => {
+    const stub = await startStub();
+    t.after(() => stub.close());
+    const secretEnv = 'DSH_MM_TEST_MANUAL_SECRET';
+    const previous = process.env[secretEnv];
+    t.after(() => { if (previous === undefined) delete process.env[secretEnv]; else process.env[secretEnv] = previous; });
+    if (confidential) process.env[secretEnv] = 'manual-secret-initial';
+    const { handler, dispose } = makeCtx();
+    const name = `manual-${confidential ? 'confidential' : 'public'}`;
+    const created = await request(handler, 'POST', '/mcp-manager/api/servers', {
+      name, type: 'http', url: stub.mcpUrl, authMode: 'oauth', clientId: 'manual-client',
+      ...(confidential ? { clientSecretEnv: secretEnv } : {}),
+    });
+    assert.equal(created.code, 201, created.text);
+    const id = created.json.server.id;
+    const auth = await authorize(handler, id);
+    assert.equal(auth.searchParams.get('client_id'), 'manual-client');
+    await complete(handler, id, auth);
+    assert.equal(stub.registerBodies.length, 0, 'manual clients must skip dynamic registration');
+    assert.equal(serverNamed(name).oauth.clientId, undefined, 'manual identity is configured on the server');
+    assert.equal(stub.tokenForms[0].get('client_secret'), confidential ? 'manual-secret-initial' : null);
+
+    if (confidential) process.env[secretEnv] = 'manual-secret-current';
+    stub.invalidate();
+    const connected = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/connect`);
+    assert.equal(refreshForms(stub).length, 1, '401 must refresh a manually registered client');
+    assert.equal(connected.json.server.status, 'connected');
+    assert.equal(refreshForms(stub)[0].get('client_id'), 'manual-client');
+    assert.equal(refreshForms(stub)[0].get('client_secret'), confidential ? 'manual-secret-current' : null);
+    assert.equal(refreshForms(stub)[0].get('resource'), stub.resource);
+    assert.equal(serverNamed(name).oauth.tokens.refresh_token, 'refresh-2');
+
+    dispose();
+    expireSavedPair(name);
+    stub.invalidate();
+    if (confidential) process.env[secretEnv] = 'manual-secret-after-restart';
+    const child = await runRestartProbe(id);
+    assert.equal(child.status, 0, child.stderr);
+    const verdict = JSON.parse(child.stdout.trim().split('\n').at(-1));
+    assert.equal(JSON.parse(verdict.body).server.status, 'connected');
+    assert.equal(refreshForms(stub).length, 2, 'restart must proactively refresh the persisted manual client');
+    assert.equal(refreshForms(stub)[1].get('client_id'), 'manual-client');
+    assert.equal(refreshForms(stub)[1].get('client_secret'), confidential ? 'manual-secret-after-restart' : null);
+    assert.equal(refreshForms(stub)[1].get('refresh_token'), 'refresh-2');
+    assert.equal(serverNamed(name).oauth.tokens.refresh_token, 'refresh-3');
+    assert.equal(stub.registerBodies.length, 0);
+    const persisted = JSON.stringify(state());
+    for (const secret of ['manual-secret-initial', 'manual-secret-current', 'manual-secret-after-restart']) {
+      assert.ok(!persisted.includes(secret), 'client secret values must never be persisted');
+    }
   });
 }
 
@@ -702,7 +757,7 @@ it('review: a concurrent settings writer waits for refresh and preserves workspa
   writeState({ servers: [seedServer(stub, 'locked')], workspaceTokens: { '/scratch\nws': { oauth: { tokens: { refresh_token: 'ws-old' } } } } });
   const refreshing = makeCtx(); const settings = makeCtx();
   stub.mint('access-old', 'refresh-old'); stub.invalidate();
-  const pending = request(refreshing.handler, 'POST', '/mcp-manager/api/servers/locked/connect');
+  const pending = request(refreshing.handler, 'POST', '/mcp-manager/api/servers/locked/enabled', { enabled: true });
   await untilReview(() => refreshForms(stub).length === 1);
   let settled = false;
   const saving = request(settings.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true }).then(result => { settled = true; return result; });
@@ -721,8 +776,8 @@ for (const action of ['disable', 'delete', 'unload']) {
     writeState({ servers: [server] }); stub.mint('access-old', 'refresh-old');
     const h = makeCtx();
     await untilReview(() => stub.seen.some(path => path === 'POST /mcp'));
-    // Await the initial connect so this isolates the new delayed loop rather
-    // than the pre-existing in-flight global-connect lifecycle behavior.
+    // Await the initial connect here; dedicated in-flight tests cover
+    // invalidation while a handshake is still pending.
     await untilReview(() => stub.seen.filter(path => path === 'POST /mcp').length >= 3);
     if (action === 'disable') await request(h.handler, 'POST', '/mcp-manager/api/servers/startup/enabled', { enabled: false });
     if (action === 'delete') await request(h.handler, 'DELETE', '/mcp-manager/api/servers/startup');
@@ -739,7 +794,7 @@ it('review: adopting a remote pair rebases later settings writes', async t => {
   const h = makeCtx();
   stub.mint('access-n', 'refresh-n');
   const fresh = state(); fresh.servers[0].oauth.tokens = { access_token: 'access-n', refresh_token: 'refresh-n', expires_at: Date.now() + 3600_000 }; writeState(fresh);
-  await request(h.handler, 'POST', '/mcp-manager/api/servers/rebase/connect');
+  await request(h.handler, 'POST', '/mcp-manager/api/servers/rebase/enabled', { enabled: true });
   const later = state(); later.servers[0].oauth.tokens = { access_token: 'access-m', refresh_token: 'refresh-m', expires_at: Date.now() + 3600_000 }; writeState(later);
   assert.equal((await request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true })).code, 200);
   assert.equal(serverNamed('rebase').oauth.tokens.refresh_token, 'refresh-m');
@@ -779,7 +834,7 @@ it('review: a failed rotation save never restores and replays the spent disk pai
   } }); t.after(() => stub.close());
   writeState({ servers: [seedServer(stub, 'unsaved')] });
   const h = makeCtx(); stub.mint('access-old', 'refresh-old'); stub.invalidate();
-  await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/connect');
+  await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/enabled', { enabled: true });
   rmSync(statePath, { recursive: true }); renameSync(backup, statePath);
   stub.invalidate();
   await request(h.handler, 'POST', '/mcp-manager/api/servers/unsaved/connect');

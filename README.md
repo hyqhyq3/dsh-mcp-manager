@@ -124,6 +124,12 @@ Recovery regression tests run with `node --test test/workspace-reconnect.test.js
 
 ## How it works
 
+In v0.13.4, pre-registered OAuth clients reuse the configured Client ID for both
+token exchange and refresh; client secrets are read from their configured
+environment variable for each grant. Global connections discard handshakes and
+failures that finish after disable, delete, edit, or plugin unload, so stale
+attempts cannot restore tools or clear a newer connection.
+
 | Piece | Mechanism |
 |---|---|
 | Settings page | Client half registers a `settings.section` slot entry (MCP tab) |

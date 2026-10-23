@@ -308,6 +308,43 @@ it('preserves global delayed-start recovery, logs and enable/disable behavior', 
   await h.request('DELETE', `/servers/${id}`);
 });
 
+for (const [action, fails] of [
+  ['disable', false], ['delete', false], ['unload', false], ['edit', false],
+  ['disable', true], ['edit', true],
+]) {
+  it(`discards a global in-flight ${fails ? 'failure' : 'handshake'} after ${action}`, async t => {
+    const remote = await endpoint({ hold: true }); t.after(remote.stop); await remote.stop();
+    const next = await endpoint(); t.after(next.stop); next.tool('replacement');
+    const h = mount(t, {});
+    const created = await h.request('POST', '/servers', { name: 'global', type: 'http', authMode: 'none', url: remote.url });
+    const id = created.server.id;
+    await until(async () => (await h.request('GET', '/servers')).servers[0].status === 'error');
+    await remote.start();
+    const pending = h.request('POST', `/servers/${id}/connect`);
+    await until(() => remote.opens() === 1);
+    if (action === 'disable') await h.request('POST', `/servers/${id}/enabled`, { enabled: false });
+    if (action === 'delete') await h.request('DELETE', `/servers/${id}`);
+    if (action === 'unload') h.dispose();
+    if (action === 'edit') {
+      const edited = await h.request('PUT', `/servers/${id}`, { name: 'global', type: 'http', authMode: 'none', url: next.url });
+      assert.equal(edited.server.status, 'connected');
+    }
+    remote.tool('stale');
+    if (fails) remote.fail('late failure');
+    remote.release();
+    await pending;
+    assert.equal(h.registered.has('mcp__global__stale'), false, 'an invalidated handshake must never publish tools');
+    assert.equal(h.registered.has('mcp__global__replacement'), action === 'edit', 'a stale result must not replace or clear a newer connection');
+    if (action === 'disable') {
+      assert.equal((await h.request('GET', '/servers')).servers[0].status, 'disabled');
+      const retry = await h.request('POST', `/servers/${id}/connect`);
+      assert.equal(retry.server.status, 'disabled', 'manual connect must respect disabled state');
+    }
+    await sleep(3300);
+    assert.equal(remote.opens(), 1, 'a stale result must not schedule another handshake');
+  });
+}
+
 it('closes a failed SSE handshake before retrying it', async t => {
   const remote = await endpoint({ sse: true, fail: 'temporary outage' }); t.after(remote.stop);
   const h = mount(t, config(remote.url)); await h.attach();

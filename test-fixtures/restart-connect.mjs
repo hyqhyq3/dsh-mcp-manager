@@ -4,12 +4,13 @@
  * `connect` for the given server id. It prints a one-line JSON verdict so the
  * parent test can assert what happened without parsing logs.
  *
- * Usage: node test/fixtures/restart-connect.mjs <serverId>
+ * Usage: node test-fixtures/restart-connect.mjs <serverId> [enable|connect]
  */
 import { apply } from '../lib/index.js'
 
 const serverId = process.argv[2]
 if (!serverId) throw new Error('serverId is required')
+const enable = process.argv[3] === 'enable'
 
 const routes = []
 const ctx = {
@@ -35,7 +36,11 @@ apply(ctx)
 const handler = routes[0]?.handler
 if (!handler) throw new Error('the plugin mounted no route')
 
-const req = { method: 'POST', url: `/mcp-manager/api/servers/${serverId}/connect`, headers: { host: '127.0.0.1:3080' }, async *[Symbol.asyncIterator]() {} }
+const req = {
+  method: 'POST', url: `/mcp-manager/api/servers/${serverId}/${enable ? 'enabled' : 'connect'}`,
+  headers: { host: '127.0.0.1:3080' },
+  async *[Symbol.asyncIterator]() { if (enable) yield Buffer.from(JSON.stringify({ enabled: true })) },
+}
 const res = {
   code: 0,
   body: '',
