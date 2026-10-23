@@ -58,21 +58,34 @@ defect. Live probes on 2026-10-23 (macOS, curl 8.7.1, Node 26.8.2):
   `https://mcp.facebook.com/.well-known/register/whatsapp_business_tools`,
   `token_endpoint_auth_methods_supported: ["none"]`,
   `code_challenge_methods_supported: ["S256"]`.
-- The advertised `registration_endpoint` is live and issues real clients, but
-  only for an allowlist of `client_name` **substrings** (`codex`, `chatgpt`,
-  `claude`, case-insensitive). The plugin's own
-  `dsh-mcp-manager-${server.name}` is refused with
+- The advertised `registration_endpoint` is live, but for third-party callers it
+  is a name-convention gate rather than per-client provisioning: it returns one
+  **shared vendor** `client_id` per allowlisted family and ignores the submitted
+  `redirect_uris`. Only `client_name` **substrings** pass (`codex`, `chatgpt`,
+  `claude`, case-insensitive; `Claude`/`claude`/`my-claude-app` all yield
+  `999229159704578`, `codex`/`ChatGPT`/`openai-codex` all yield
+  `1534993945062995`). The plugin's own `dsh-mcp-manager-${server.name}` is
+  refused with
   `400 {"error":"invalid_client_metadata","error_description":"Dynamic registration is not available for this client."}`.
   Holding the name fixed, `application_type` (native/web/absent), `scope` and
   the loopback port never change the outcome, so the SEP-837 classification
   does not affect this provider. A non-loopback `redirect_uris` is a separate
   gate (`invalid_redirect_uri`), and Meta rewrites `localhost` to `127.0.0.1`.
-- Adopting an allowlisted vendor name is **not** shipped: it would impersonate
-  another product's client identity. An invented numeric Client ID does not
-  work either — `authorize` with one redirects to
-  `https://www.facebook.com/oauth/error/` carrying
-  `error_code=PLATFORM__INVALID_APP_ID`, whereas a DCR-issued id reaches the
-  real `https://www.facebook.com/login.php` flow.
+- Adopting an allowlisted vendor name is **not** shipped: it would adopt another
+  product's client identity. An invented numeric Client ID does not work
+  either. Most such ids redirect `authorize` to
+  `https://www.facebook.com/oauth/error/` with
+  `error_code=PLATFORM__INVALID_APP_ID`, but some shapes (e.g.
+  `1000000000000000`, `0`) instead answer `200` with a Facebook login wall and
+  no `Location` — a dead end with a different symptom. The token endpoint is
+  what separates a real app from an unresolved id: a deliberately invalid code
+  yields `code=100` ("Invalid verification code format.") for a resolved app and
+  `code=101` ("Missing or invalid client id.") for an unresolved one; a real
+  third-party app is rejected with `code=191` if its app domain does not cover
+  the redirect. Note that reaching `/login.php` is not itself evidence of a
+  usable client: a real app id, an unregistered loopback port and even an
+  `https://example.com/cb` redirect (which the DCR metadata does not restrict at
+  authorize time) all reach it.
 
 Supported path: a Meta app the **user** owns, entered as `clientId` (+ optional
 `clientSecretEnv`, `scope`), with the exact loopback callback registered in that
@@ -106,3 +119,13 @@ exercised.
 - Real Meta/WhatsApp OAuth remains unproven end-to-end; see the #21 evidence
   section in the issue reply. This candidate does not change the provider
   admission outcome.
+- Pre-existing redaction gaps found while verifying the #21 evidence, **not**
+  fixed here (they are unrelated to the issues this candidate closes): the
+  attempt-log regex list at `lib/index.js:1075` masks `code`, `state`,
+  `client_secret`, `access_token`, `refresh_token` and `id_token` but not
+  `code_challenge`, so an `authorize` entry stores the PKCE challenge verbatim
+  (it is a hash of the verifier, not a bearer credential, and `code_verifier`
+  itself is never logged); and `redactDetail` leaves JSON-shaped bodies
+  unmasked because its value pattern excludes a leading quote, which matters for
+  the `String(resp.text).slice(0, 200)` fallbacks at `lib/index.js:1335` and
+  `:1401`. Both are worth a follow-up release.
