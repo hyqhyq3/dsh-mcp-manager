@@ -2,11 +2,14 @@
 
 [简体中文](README.zh-CN.md) | English
 
+> Local **0.13.2 unreleased candidate**: see the [release notes](docs/release-v0.13.2.md) for cumulative changes, provenance and verification limits.
+
 **MCP server manager for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — a Settings → MCP page where you add MCP servers once (remote HTTP or local stdio process), authenticate HTTP servers with **OAuth in the browser**, and expose their tools either directly or through a compact on-demand broker.
 
 The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` config — it has no OAuth support and no local stdio transport. This plugin fills that gap:
 
 - **OAuth (authorization code + PKCE)** with spec-compliant discovery, RFC 7591 dynamic client registration, `refresh_token` rotation, and auto-reconnect across restarts — one browser login, then it keeps working.
+  - **Client application type** follows MCP SEP-837: HTTP loopback callbacks (`localhost`, IPv4 loopback, or `[::1]`) register as `native`; other callbacks register as `web`. This avoids OIDC providers defaulting a local GUI to `web` and rejecting its redirect. Registration failures show the provider's OAuth error code when available; the Logs panel retains the detailed reason. Providers may still restrict which clients or redirects they accept.
   - **Callback origin** accepts direct loopback `Host` values (including `[::1]:port`). Configure
     `publicOrigins` for a reverse proxy: one configured origin is the default callback even without
     forwarded headers; with multiple origins, a complete `X-Forwarded-Proto`/`X-Forwarded-Host` pair
@@ -83,6 +86,14 @@ With on-demand mode on, a Native-mode agent sees only these three MCP broker too
 - `mcp_execute_tool({ name, arguments })` executes any currently visible MCP tool through the normal DSH tool pipeline. Calling `describe` first is recommended but not required.
 
 Raw `mcp__*` names are removed from the model request and direct calls to them are denied; only the nested dispatch owned by `mcp_execute_tool` is allowed. Search, describe, and execute all resolve the calling agent's live registry view, so workspace isolation and `exclude` masks remain effective.
+
+Code/PTC/both agents retain their full session-visible MCP catalog, even with
+this switch on. The broker remains callable but does not shrink the generated
+SDK. DSH `0.2.0-rc.2` names its modes `native/ptc/both`; `0.2.1-rc.2` supports
+`native/ptc`. See [issue #18 investigation and isolated verification](docs/on-demand-code-mode.md)
+for the checked interfaces, safe fallbacks, context-cost measurements and test
+commands. The local 0.13.2 candidate also keeps this conservative fallback when a custom
+prompt empties `tools:sdk` but still exposes `run_code`.
 
 ### Workspace isolation
 
@@ -164,7 +175,7 @@ Next gate: a real-profile readback (resolved version, running process, visible S
 ## Limitations
 
 - `resources` and `prompts` MCP capabilities are not bridged (tools only).
-- On-demand filtering currently targets DSH's default `native` presentation. Agents using `code` or `both` keep the full MCP catalog to avoid advertising an incomplete generated SDK or blocking valid Code Mode sub-dispatches.
+- On-demand filtering targets `native` presentation. Code/PTC/both agents keep the full session-visible MCP catalog. Exported SDK renderers and the assembly waterfall do not provide a presentation-only catalog contract; see the [interface evidence and fallbacks](docs/on-demand-code-mode.md). Full SDK compression remains open in [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18).
 - OAuth tokens live in a plain JSON file under `~/.dsh` — treat the file as a secret. Static bearer tokens and `headerEnv` values are read from environment variables and never persisted. Workspace OAuth tokens live in the same state file, never in the workspace's `mcp.json`.
 - stdio servers run as long-lived child processes tied to the plugin lifecycle. On POSIX `args` are whitespace-tokenized (quotes protect args with spaces) with no shell expansion; on Windows the command line is passed to `cmd.exe`, so shell metacharacters (`&`, `|`, `>`, `%VAR%`) are interpreted — the command and any argument containing whitespace are quoted automatically (already-quoted values are left as-is), but prefer absolute paths.
 - One OAuth client registration per server per GUI origin; moving the GUI to a new origin re-registers automatically on the next login. A manually configured Client ID is never re-registered — its redirect URI must already be whitelisted with the provider, so a GUI origin change shows up as a provider-side redirect error rather than an automatic fix.

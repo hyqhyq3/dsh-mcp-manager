@@ -1,3 +1,5 @@
+> Historical validation of the original #20 head. The integrated local candidate is now0.13.2; see [cumulative release notes](release-v0.13.2.md). The0.13.6 references below describe the original contributor metadata, not an owner release.
+
 # OAuth state safety review validation
 
 This candidate retains the six original commits from [PR #19](https://github.com/hyqhyq3/dsh-mcp-manager/pull/19), authored by Petr Bondarev / bondarevpm-tech, and adds the local review repairs. Original source head: `9d0c6a42e6dadc4d2630160d31cb38aacd7a2b68`; reviewed main: `5bf55ceb260d067c22c3b2e3183ec85d4dbb5301`. Original PR remains separate. No issue is closed by this candidate.

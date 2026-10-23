@@ -2,11 +2,14 @@
 
 [English](README.md) | 简体中文
 
+> 本地 **0.13.2 未发布候选**：累计改动、来源与验收边界见[发行说明](docs/release-v0.13.2.md)。
+
 **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的 MCP 服务器管理插件** —— 在 设置 → MCP 页签里添加 MCP 服务器（远程 HTTP 或本地 stdio 进程），HTTP 服务器可在 **浏览器里完成 OAuth 登录**，工具既可直接暴露，也可通过紧凑的按需 broker 调用。
 
 内置的 `@deepseek-ai/dsh-mcp-client` 只接受静态 `headers` 配置——不支持 OAuth，也不支持本地 stdio 进程。本插件补上这块：
 
 - **OAuth（授权码 + PKCE）**：规范化的元数据发现、RFC 7591 动态客户端注册、`refresh_token` 自动轮换、重启后自动重连——浏览器登录一次，之后一直可用。
+  - **客户端应用类型**遵循 MCP SEP-837：HTTP 回环回调（`localhost`、IPv4 回环地址或 `[::1]`）注册为 `native`，其他回调注册为 `web`，避免 OIDC 提供方把本地 GUI 默认视为 `web` 而拒绝其重定向。注册失败时显示提供方返回的 OAuth 错误码（若有），详细原因仍可在日志面板查看。提供方仍可能限制可接受的客户端或回调地址。
   - **回调 origin**：直接访问接受 loopback `Host`（包括 `[::1]:端口`）。反向代理通过 `publicOrigins` 配置显式白名单；只有一个 origin 时，它就是默认回调地址，无需转发头。配置多个 origin 时，完整的 `X-Forwarded-Proto` / `X-Forwarded-Host` 必须匹配白名单。无默认配置时拒绝外部 Host；格式非法的转发 Host 返回错误。回调页对消息进行 HTML 转义。
   - **RFC 8707 `resource`**：从受保护资源元数据读取，并传给授权、换取 token 和刷新请求；提供方不发布该值时不自行猜测。
   - **发现链**按 RFC 9728 → RFC 8414 顺序：MCP 端点 401 响应里的 `WWW-Authenticate` 指向受保护资源元数据，该文档再指出授权服务器，最后按 RFC 8414 的「路径插值」URL 读取授权服务器元数据（如 `https://github.com/.well-known/oauth-authorization-server/login/oauth`）。只有完全发现不到时才回退到猜测 `${origin}/oauth/*`，且日志里会说明这是猜的。
@@ -76,6 +79,13 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 - `mcp_execute_tool({ name, arguments })`：通过 DSH 标准工具流水线执行当前可见 MCP 工具；建议先 describe，但不强制。
 
 模型请求中不再出现原始 `mcp__*` schema，直接调用这些隐藏名称也会被拒绝；只有 `mcp_execute_tool` 拥有的嵌套调用可以通过。三个 broker 都读取调用 agent 的实时工具视图，因此继续遵守 workspace 隔离与 `exclude` 屏蔽。
+
+即使开启此开关，Code/PTC/both agent 也会保留当前会话可见的完整 MCP 目录；
+broker 可以调用，但不会压缩生成式 SDK。DSH `0.2.0-rc.2` 的模式名为
+`native/ptc/both`，`0.2.1-rc.2` 支持 `native/ptc`。接口核实、可行降级、
+上下文字节成本与复测命令见 [#18 调查及隔离验证](docs/on-demand-code-mode.md)。
+本地 0.13.2 候选也在自定义提示词清空 `tools:sdk`、但仍暴露 `run_code` 时保留该降级，
+避免误拦截合法子调用。
 
 ### 工作区隔离
 
@@ -157,7 +167,7 @@ DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.
 ## 已知限制
 
 - 只桥接 MCP 的工具能力（resources / prompts 不支持）。
-- 按需过滤目前只支持 DSH 默认的 `native` 工具呈现模式。使用 `code` 或 `both` 的 agent 会保留完整 MCP 目录，避免生成式 SDK 不完整或误拦截 Code Mode 子调用。
+- 按需过滤支持 `native` 呈现。Code/PTC/both agent 保留当前会话可见的完整 MCP 目录。导出的 SDK renderer 与 assembly 瀑布尚未提供“仅呈现目录过滤”的契约，见[接口证据与降级方案](docs/on-demand-code-mode.md)；完整 SDK 压缩仍由 [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18) 跟进。
 - OAuth token 明文存于 `~/.dsh` 下的 JSON 文件——请当作机密对待。静态 token 与 `headerEnv` 的值从环境变量读取，不落盘。工作区 OAuth token 也存于同一状态文件，不写进工作区的 `mcp.json`。
 - stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下整条命令行交给 `cmd.exe`，`&`、`|`、`>`、`%VAR%` 等会被 shell 解释——命令与含空格的参数会被自动加引号（已加引号的原样保留），但仍建议使用绝对路径。
 - 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册。手动配置的 Client ID 永远不会被重新注册——其重定向 URI 必须已在提供方白名单里，因此 GUI 换 origin 会表现为提供方侧的重定向错误，而不是自动修复。
