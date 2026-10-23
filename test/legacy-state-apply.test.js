@@ -115,3 +115,15 @@ describe('apply() over a legacy state file (issue #9 bug 1)', () => {
     assert.equal(missing.code, 404);
   });
 });
+
+it('premerge: persists exactly two distinct rows when migrating duplicate server ids', () => {
+  writeFileSync(statePath, JSON.stringify({ servers: [
+    { id: 'duplicate', name: 'first', type: 'stdio', command: 'unused', enabled: false },
+    { id: 'duplicate', name: 'second', type: 'stdio', command: 'unused', enabled: false },
+  ] }));
+  makeCtx();
+  const persisted = JSON.parse(readFileSync(statePath, 'utf8'));
+  assert.equal(persisted.servers.length, 2);
+  assert.equal(new Set(persisted.servers.map(server => server.id)).size, 2);
+  assert.deepEqual(persisted.servers.map(server => server.name), ['first', 'second']);
+});

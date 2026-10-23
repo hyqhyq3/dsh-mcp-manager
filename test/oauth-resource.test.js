@@ -815,3 +815,40 @@ it('review: an orphaned reclaimer guard fails closed until operator recovery', a
   unlinkSync(guard);
   assert.equal((await pending).code, 200);
 });
+
+it('premerge: queued state writes preserve same-process invocation order', async () => {
+  const lock = `${statePath}.refresh.lock`;
+  writeFileSync(lock, `${process.pid}\nexternal-owner`);
+  const h = makeCtx();
+  const first = request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true });
+  await new Promise(resolve => setImmediate(resolve));
+  const view = await request(h.handler, 'GET', '/mcp-manager/api/settings');
+  assert.equal(view.json.onDemandToolInjection, true, 'first write reached its lock wait');
+  unlinkSync(lock);
+  const second = request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false });
+  assert.equal((await second).code, 200);
+  assert.equal((await first).code, 200);
+  assert.equal(state().onDemandToolInjection, false, 'earlier queued save must not overwrite the later save');
+});
+
+it('premerge: retrying disable after lock timeout persists the requested state', async t => {
+  const stub = await startStub(); t.after(() => stub.close());
+  writeState({ servers: [seedServer(stub, 'disable-timeout', { enabled: true })] });
+  stub.mint('access-old', 'refresh-old');
+  const h = makeCtx();
+  await untilReview(() => stub.seen.filter(path => path === 'POST /mcp').length >= 3);
+  const lock = `${statePath}.refresh.lock`;
+  writeFileSync(lock, `${process.pid}\nexternal-owner`);
+  const realNow = Date.now;
+  const now = realNow();
+  let tick = 0;
+  let failed;
+  try {
+    Date.now = () => now + tick++ * 30000;
+    failed = await request(h.handler, 'POST', '/mcp-manager/api/servers/disable-timeout/enabled', { enabled: false });
+  } finally { Date.now = realNow; unlinkSync(lock); }
+  assert.equal(failed.code, 500, 'the first save must encounter the lock timeout');
+  const retried = await request(h.handler, 'POST', '/mcp-manager/api/servers/disable-timeout/enabled', { enabled: false });
+  assert.equal(retried.code, 200, retried.text);
+  assert.equal(serverNamed('disable-timeout').enabled, false, 'retry must save rather than take the equality shortcut');
+});

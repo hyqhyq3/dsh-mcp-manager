@@ -113,7 +113,7 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 | OAuth 发现 | 解析 MCP 端点 401 响应里的 `WWW-Authenticate` 的 `resource_metadata` 并缓存到该服务器；资源元数据指出授权服务器，其元数据按 RFC 8414 路径插值 well-known URL 读取（另有 OpenID configuration 与 origin 级探测）。猜测的 `${origin}/oauth/*` 只是最后兜底，并会标记为 fallback |
 | 诊断日志 | 每服务器一个内存环形缓冲（最多 20 条），记录 discovery/register/authorize/token/initialize/tools-list/stdio 各阶段及 URL 与 HTTP 状态，经 `GET /mcp-manager/api/servers/:id/logs` 暴露；写入时即脱敏，且不落盘（写日志文件会引入新的静态密钥面） |
 | Token 存储 | `~/.dsh/mcp-manager.json`；OAuth token 401 时自动刷新。静态 token 从 `tokenEnv` 指定的环境变量读取，OAuth `client_secret` 从 `clientSecretEnv` 指定的环境变量读取，两者的值都不落盘。无鉴权服务器不存凭据、也不发送 `Authorization` 头 |
-| 刷新安全 | 刷新在进程内单飞，并在共享同一状态文件的多个 DSH 进程之间串行：刷新与所有配置写入共享同一把锁，锁内重读采用磁盘最新凭据，即使 access token 已过期也使用最新 refresh token。仅合并本进程更改的字段，保留其他进程更新的服务器及工作区凭据。陈旧锁仅在持有者已退出或创建不完整时回收，不会因时间过长抢占活跃进程的锁。陈旧锁回收也互斥；回收进程崩溃留下 `.refresh.lock.reclaim` 时，需要操作员核实并移除该文件后才恢复自动回收，此前写入会超时而不抢锁。状态文件原子替换（0600、fsync + rename）。轮换成功但落盘失败时，该进程继续使用内存中的 access token，但停止后续刷新；先修复状态文件路径，再重新授权。`invalid_grant` 会把服务器标为 `needs-auth` 并停止重放已作废的 token。`/api/servers` 返回 `oauth.expiresAt`、`needsReauth`、`lastRefreshAt`、`lastRefreshError`、`lastToolOkAt`——只有时间戳和错误码，绝不含 token 本身 |
+| 刷新安全 | 刷新在进程内单飞，并在共享同一状态文件的多个 DSH 进程之间串行：刷新与所有配置写入共享同一把锁，本进程按 FIFO 顺序获得锁，防止较早排队的保存覆盖较晚的保存，锁内重读采用磁盘最新凭据，即使 access token 已过期也使用最新 refresh token。仅合并本进程更改的字段，保留其他进程更新的服务器及工作区凭据。陈旧锁仅在持有者已退出或创建不完整时回收，不会因时间过长抢占活跃进程的锁。陈旧锁回收也互斥；回收进程崩溃留下 `.refresh.lock.reclaim` 时，需要操作员核实并移除该文件后才恢复自动回收，此前写入会超时而不抢锁。状态文件原子替换（0600、fsync + rename）。轮换成功但落盘失败时，该进程继续使用内存中的 access token，但停止后续刷新；先修复状态文件路径，再重新授权。`invalid_grant` 会把服务器标为 `needs-auth` 并停止重放已作废的 token。`/api/servers` 返回 `oauth.expiresAt`、`needsReauth`、`lastRefreshAt`、`lastRefreshError`、`lastToolOkAt`——只有时间戳和错误码，绝不含 token 本身 |
 | 旧状态迁移 | 加载时给缺少 `id` 的服务器补一个并落盘，同时把 `[{ name, value }]` 形式的 env/header 列表归一化为映射——否则按 id 的 API 会 404、数组形式的 env 会被静默丢弃 |
 | MCP 传输（HTTP） | Streamable HTTP（POST JSON-RPC、`Mcp-Session-Id`、SSE/JSON 双格式响应），并在服务器拒绝普通 POST 时自动降级到旧式 HTTP-with-SSE 会话传输（GET 流给出 POST 端点、响应经该流异步回传）；每次请求合并自定义 `headers`/`headerEnv` |
 | 断线重连 | 启动复用已有的立即连接路径；禁用或删除后不会再执行第二轮延迟恢复。连接失败按指数退避重试（3s → 6s → 12s … 上限 60s，成功即重置）；SSE 会话的流一旦断开立即重连，在途调用快速失败而不是阻塞到超时 |
@@ -131,7 +131,7 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 发行版不可变且带 tag，消费者可以固定到某个版本：
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.13.0
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.13.1
 ```
 
 DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.12.0 发行 = `b029407ca3d258e83abac6c06ff94f92e5687164`；每次推送后由商城重新固定最新发行版）。
