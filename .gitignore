@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 pnpm-lock.yaml
 .dsh/
+
+# Built artifacts are not part of the source tree.
+*.tgz

@@ -2,12 +2,24 @@
 
 [简体中文](README.zh-CN.md) | English
 
+> Local **0.13.2 unreleased candidate**: see the [release notes](docs/release-v0.13.2.md) for cumulative changes, provenance and verification limits.
+
 **MCP server manager for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — a Settings → MCP page where you add MCP servers once (remote HTTP or local stdio process), authenticate HTTP servers with **OAuth in the browser**, and expose their tools either directly or through a compact on-demand broker.
 
 The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` config — it has no OAuth support and no local stdio transport. This plugin fills that gap:
 
 - **OAuth (authorization code + PKCE)** with spec-compliant discovery, RFC 7591 dynamic client registration, `refresh_token` rotation, and auto-reconnect across restarts — one browser login, then it keeps working.
+  - **Client application type** follows MCP SEP-837: HTTP loopback callbacks (`localhost`, IPv4 loopback, or `[::1]`) register as `native`; other callbacks register as `web`. This avoids OIDC providers defaulting a local GUI to `web` and rejecting its redirect. Registration failures show the provider's OAuth error code when available; the Logs panel retains the detailed reason. Providers may still restrict which clients or redirects they accept.
+  - **Callback origin** accepts direct loopback `Host` values (including `[::1]:port`). Configure
+    `publicOrigins` for a reverse proxy: one configured origin is the default callback even without
+    forwarded headers; with multiple origins, a complete `X-Forwarded-Proto`/`X-Forwarded-Host` pair
+    must match the allowlist. A foreign direct Host is rejected when no default is configured.
+    Malformed forwarded host values are rejected. Callback messages are HTML-escaped.
   - **Discovery** follows RFC 9728 → RFC 8414: the MCP endpoint's 401 `WWW-Authenticate` header names its protected-resource metadata, that document names the authorization server, and the authorization server's metadata is read from the RFC 8414 path-inserted URL (e.g. `https://github.com/.well-known/oauth-authorization-server/login/oauth`). Only when nothing is discoverable does it fall back to guessing `${origin}/oauth/*`, and the attempt log says so.
+  - **RFC 8707 `resource`** taken from the protected-resource document and sent on authorize, token
+    exchange and refresh. A server that binds tokens to an audience (Kontrcheck's connector does)
+    rejects every step without it as `invalid_target`. Providers that publish no resource keep
+    the previous behaviour exactly: nothing is invented.
   - **Manual client credentials** for authorization servers that do not support dynamic registration (GitHub's does not): set **Client ID** to an app you registered with the provider, optionally a **Client secret environment variable** name (sent as `client_secret`; the secret itself is never persisted), and a **Scope** string.
 - **Static Bearer token** mode for servers without OAuth — stored as an environment-variable **name** (Codex-style `tokenEnv`), never as plaintext in the config.
 - **No auth** mode for servers that need no credentials at all (e.g. a local `http://127.0.0.1:9316/mcp`) — the plugin sends no `Authorization` header and connects on save.
@@ -75,6 +87,14 @@ With on-demand mode on, a Native-mode agent sees only these three MCP broker too
 
 Raw `mcp__*` names are removed from the model request and direct calls to them are denied; only the nested dispatch owned by `mcp_execute_tool` is allowed. Search, describe, and execute all resolve the calling agent's live registry view, so workspace isolation and `exclude` masks remain effective.
 
+Code/PTC/both agents retain their full session-visible MCP catalog, even with
+this switch on. The broker remains callable but does not shrink the generated
+SDK. DSH `0.2.0-rc.2` names its modes `native/ptc/both`; `0.2.1-rc.2` supports
+`native/ptc`. See [issue #18 investigation and isolated verification](docs/on-demand-code-mode.md)
+for the checked interfaces, safe fallbacks, context-cost measurements and test
+commands. The local 0.13.2 candidate also keeps this conservative fallback when a custom
+prompt empties `tools:sdk` but still exposes `run_code`.
+
 ### Workspace isolation
 
 Global servers (added in **Settings → MCP**) are visible in every workspace. Use the **workspace dropdown** at the top of the Settings → MCP page to switch between "global" and a specific workspace; when a workspace is selected you see both its own servers and the global servers (with a **隐藏 / Hide** toggle to mask each global server). Workspace servers live in `<workspace>/.dsh/dshmm/mcp.json` (Claude/Codex-style):
@@ -111,9 +131,10 @@ Recovery regression tests run with `node --test test/workspace-reconnect.test.js
 | OAuth discovery | The MCP endpoint's 401 `WWW-Authenticate` is parsed for `resource_metadata`, which is cached on the server; resource metadata names the authorization server, whose metadata is fetched from the RFC 8414 path-inserted well-known URL (plus an OpenID-configuration and origin-level probe). Guessed `${origin}/oauth/*` endpoints are a last resort, tagged as a fallback |
 | Diagnostics | A per-server in-memory ring buffer (last 20 entries) records discovery/register/authorize/token/initialize/tools-list/stdio phases with URL + HTTP status, exposed at `GET /mcp-manager/api/servers/:id/logs`; entries are redacted on write and never persisted (a log file would be a new secret-at-rest surface) |
 | Token storage | `~/.dsh/mcp-manager.json`; OAuth tokens refreshed automatically on 401. Static tokens are read from the environment variable named by `tokenEnv`, and an OAuth `client_secret` is read from the environment variable named by `clientSecretEnv` — neither value is ever persisted. No-auth servers store no credential and send no `Authorization` header |
+| Refresh safety | Refresh is single-flight per process and serialized across DSH processes that share the state file: a shared lock covers refresh and all configuration writes, with FIFO ownership within each process so queued saves cannot overtake each other. A re-read adopts the latest disk pair even when its access token has expired, and changed-field merging preserves other processes’ server/workspace tokens. Stale locks are reclaimed only for dead or incomplete owners; live owners are never evicted by age. Reclamation is itself exclusive; an orphaned `.refresh.lock.reclaim` guard after a crash requires operator inspection/removal before stale recovery resumes (writes time out rather than steal a lock). The state file is replaced atomically (0600, fsync + rename). If a rotated pair cannot be persisted, that process keeps its access token but stops further refreshes until successful reauthorization; repair the state path before reauthorizing. An `invalid_grant` marks the server `needs-auth` and stops replaying the spent token. `/api/servers` reports `oauth.expiresAt`, `needsReauth`, `lastRefreshAt`, `lastRefreshError`, `lastToolOkAt` — timestamps and error codes only, never token material |
 | Legacy state | On load, servers without an `id` are assigned one (and persisted), and legacy `[{ name, value }]` env/header lists are normalized to maps — without this, id-addressed APIs 404 and array env values are dropped silently |
 | MCP transport (HTTP) | Streamable HTTP (JSON-RPC over POST, `Mcp-Session-Id`, SSE or JSON responses) with automatic fallback to the legacy HTTP-with-SSE session transport — a GET stream advertises the POST endpoint and delivers replies asynchronously; custom `headers`/`headerEnv` merged into every request |
-| Reconnect | A failed connect retries with exponential backoff (3s → 6s → 12s … capped at 60s, reset on success); an SSE session whose stream drops immediately reconnects, and its in-flight calls fail fast instead of blocking until timeout |
+| Reconnect | Startup uses the existing immediate connection path; disabling or deleting a server does not queue a second delayed restore. A failed connect retries with exponential backoff (3s → 6s → 12s … capped at 60s, reset on success); an SSE session whose stream drops immediately reconnects, and its in-flight calls fail fast instead of blocking until timeout |
 | MCP transport (stdio) | `child_process.spawn` a local command, JSON-RPC over stdin/stdout (newline-delimited); reconnect reaps the old process first. On Windows it spawns through `cmd.exe` so `.cmd` shims resolve |
 | Tool schema | Server JSON Schemas are sanitized to the registry's supported raw subset (unsupported vocabulary degrades to unconstrained) |
 | Image results | `output.render` is text-first; `execute(args, exec)` stages a projection and `finalizeContent` installs durable DSH attachments only when the routed model declares image input — every other case degrades to a text placeholder |
@@ -128,7 +149,7 @@ Recovery regression tests run with `node --test test/workspace-reconnect.test.js
 Releases are immutable and tagged, so consumers can pin one:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.13.0
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.13.1
 ```
 
 The DSH STORE catalog additionally pins a full 40-character commit instead of a floating branch (release 0.12.0 = `b029407ca3d258e83abac6c06ff94f92e5687164`; the store re-pins the newest release after each push).
@@ -154,7 +175,7 @@ Next gate: a real-profile readback (resolved version, running process, visible S
 ## Limitations
 
 - `resources` and `prompts` MCP capabilities are not bridged (tools only).
-- On-demand filtering currently targets DSH's default `native` presentation. Agents using `code` or `both` keep the full MCP catalog to avoid advertising an incomplete generated SDK or blocking valid Code Mode sub-dispatches.
+- On-demand filtering targets `native` presentation. Code/PTC/both agents keep the full session-visible MCP catalog. Exported SDK renderers and the assembly waterfall do not provide a presentation-only catalog contract; see the [interface evidence and fallbacks](docs/on-demand-code-mode.md). Full SDK compression remains open in [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18).
 - OAuth tokens live in a plain JSON file under `~/.dsh` — treat the file as a secret. Static bearer tokens and `headerEnv` values are read from environment variables and never persisted. Workspace OAuth tokens live in the same state file, never in the workspace's `mcp.json`.
 - stdio servers run as long-lived child processes tied to the plugin lifecycle. On POSIX `args` are whitespace-tokenized (quotes protect args with spaces) with no shell expansion; on Windows the command line is passed to `cmd.exe`, so shell metacharacters (`&`, `|`, `>`, `%VAR%`) are interpreted — the command and any argument containing whitespace are quoted automatically (already-quoted values are left as-is), but prefer absolute paths.
 - One OAuth client registration per server per GUI origin; moving the GUI to a new origin re-registers automatically on the next login. A manually configured Client ID is never re-registered — its redirect URI must already be whitelisted with the provider, so a GUI origin change shows up as a provider-side redirect error rather than an automatic fix.

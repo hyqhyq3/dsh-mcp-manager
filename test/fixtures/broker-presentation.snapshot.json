@@ -1,0 +1,16 @@
+{
+  "0.2.0-rc.2": [
+    { "mode": "native", "enabled": false, "wireMcpSchemas": 69, "brokerWireSchemas": 0, "sdkMcpTools": 0 },
+    { "mode": "native", "enabled": true, "wireMcpSchemas": 0, "brokerWireSchemas": 3, "sdkMcpTools": 0 },
+    { "mode": "ptc", "enabled": false, "wireMcpSchemas": 0, "brokerWireSchemas": 0, "sdkMcpTools": 69 },
+    { "mode": "ptc", "enabled": true, "wireMcpSchemas": 0, "brokerWireSchemas": 0, "sdkMcpTools": 69 },
+    { "mode": "both", "enabled": false, "wireMcpSchemas": 69, "brokerWireSchemas": 0, "sdkMcpTools": 69 },
+    { "mode": "both", "enabled": true, "wireMcpSchemas": 69, "brokerWireSchemas": 3, "sdkMcpTools": 69 }
+  ],
+  "0.2.1-rc.2": [
+    { "mode": "native", "enabled": false, "wireMcpSchemas": 69, "brokerWireSchemas": 0, "sdkMcpTools": 0 },
+    { "mode": "native", "enabled": true, "wireMcpSchemas": 0, "brokerWireSchemas": 3, "sdkMcpTools": 0 },
+    { "mode": "ptc", "enabled": false, "wireMcpSchemas": 0, "brokerWireSchemas": 0, "sdkMcpTools": 69 },
+    { "mode": "ptc", "enabled": true, "wireMcpSchemas": 0, "brokerWireSchemas": 0, "sdkMcpTools": 69 }
+  ]
+}
