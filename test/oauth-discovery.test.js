@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
@@ -23,7 +24,7 @@ const statePath = join(scratchHome, '.dsh', 'mcp-manager.json');
 const { apply } = await import('../lib/index.js');
 
 /** Minimal ctx: enough for apply() to mount its route without a real harness. */
-function makeCtx() {
+function makeCtx(config = {}) {
   const routes = [];
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
@@ -43,17 +44,17 @@ function makeCtx() {
     },
     effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose(); }; },
   };
-  apply(ctx);
+  apply(ctx, config);
   return { routes, handler: routes[0]?.handler };
 }
 
 /** Call the mounted route with a minimal req/res pair; returns the raw body too. */
-async function request(handler, method, path, body) {
+async function request(handler, method, path, body, headers = {}) {
   const payload = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
   const req = {
     method,
     url: path,
-    headers: { host: '127.0.0.1:3080' },
+    headers: { host: '127.0.0.1:3080', ...headers },
     async *[Symbol.asyncIterator]() { for (const chunk of payload) yield chunk; },
   };
   const res = {
@@ -75,9 +76,10 @@ async function request(handler, method, path, body) {
  * only served at the RFC 8414 path-inserted URL. It records every request so a
  * test can prove which URLs were probed.
  */
-function startStub({ advertiseRegistration = false, tokenBody = null } = {}) {
+function startStub({ advertiseRegistration = false, tokenBody = null, requiredApplicationType = '' } = {}) {
   const seen = [];
   const forms = [];
+  const registrations = [];
   const server = createServer((req, res) => {
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
@@ -91,6 +93,14 @@ function startStub({ advertiseRegistration = false, tokenBody = null } = {}) {
       const base = `http://127.0.0.1:${server.address().port}`;
 
       if (req.url === '/mcp') {
+        if (requiredApplicationType && req.headers.authorization === 'Bearer stub-access-token') {
+          const message = JSON.parse(raw || '{}');
+          if (message.id === undefined) return send(202, '');
+          const result = message.method === 'initialize'
+            ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'strict-oauth', version: '1' } }
+            : message.method === 'tools/list' ? { tools: [{ name: 'echo', inputSchema: { type: 'object' } }] } : {};
+          return send(200, { jsonrpc: '2.0', id: message.id, result });
+        }
         return send(401, { error: 'unauthorized' }, {
           'WWW-Authenticate': `Bearer error="invalid_request", error_description="No access token was provided in this request", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
         });
@@ -114,7 +124,11 @@ function startStub({ advertiseRegistration = false, tokenBody = null } = {}) {
         if (!advertiseRegistration) return send(404, '404 page not found');
         let payload = {};
         try { payload = JSON.parse(raw || '{}'); } catch {}
+        registrations.push(payload);
         if (!Array.isArray(payload.redirect_uris) || payload.redirect_uris.length === 0) return send(400, { error: 'invalid_client_metadata' });
+        if (requiredApplicationType && payload.application_type !== requiredApplicationType) {
+          return send(400, { error: 'invalid_client_metadata', error_description: `application_type must be ${requiredApplicationType}` });
+        }
         return send(201, { client_id: 'dcr-client', redirect_uris: payload.redirect_uris });
       }
       if (req.url === '/login/oauth/access_token') {
@@ -133,6 +147,7 @@ function startStub({ advertiseRegistration = false, tokenBody = null } = {}) {
         mcpUrl: `${base}/mcp`,
         seen,
         forms,
+        registrations,
         async close() {
           server.closeAllConnections?.();
           await new Promise((done) => server.close(done));
@@ -143,6 +158,94 @@ function startStub({ advertiseRegistration = false, tokenBody = null } = {}) {
 }
 
 const state = () => JSON.parse(readFileSync(statePath, 'utf8'));
+
+// SEP-837: a strict OIDC registration endpoint distinguishes locally hosted
+// clients from remote web clients. These are synthetic Host headers only;
+// every network request goes to the loopback stub, never to these hostnames.
+for (const [host, applicationType] of [
+  ['localhost:3080', 'native'],
+  ['127.0.0.1:3080', 'native'],
+  ['127.0.0.2:3080', 'native'],
+  ['[::1]:3080', 'native'],
+  ['remote.example.test:3080', 'web'],
+  ['localhost.example.test:3080', 'web'],
+  ['127.example.test:3080', 'web'],
+]) {
+  it(`issue #21: registers ${host} as ${applicationType}`, async (t) => {
+    const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: applicationType });
+    t.after(() => stub.close());
+    // Test-only origins also satisfy hosts that require an explicit allowlist.
+    const { handler } = makeCtx({ publicOrigins: [`http://${host}`] });
+    const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: `type-${host.replace(/[^A-Za-z0-9_-]/g, '_')}`, type: 'http', url: stub.mcpUrl });
+    assert.equal(created.code, 201, created.text);
+    const id = created.json.server.id;
+    const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host });
+    assert.equal(auth.code, 200, auth.text);
+    assert.equal(stub.registrations.length, 1);
+    assert.equal(stub.registrations[0].application_type, applicationType);
+    assert.deepEqual(stub.registrations[0].redirect_uris, [`http://${host}/mcp-manager/callback/${id}`]);
+    assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('client_id'), 'dcr-client');
+  });
+}
+
+it('issue #21: strict native registration completes PKCE, connects, and reuses only the same redirect', async (t) => {
+  const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: 'native' });
+  const { handler } = makeCtx();
+  let id;
+  t.after(async () => {
+    if (id) await request(handler, 'DELETE', `/mcp-manager/api/servers/${id}`);
+    await stub.close();
+  });
+  const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'native-roundtrip', type: 'http', url: stub.mcpUrl });
+  assert.equal(created.code, 201, created.text);
+  id = created.json.server.id;
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(auth.code, 200, auth.text);
+  const authorize = new URL(auth.json.authorizeUrl);
+  const redirect = `http://127.0.0.1:3080/mcp-manager/callback/${id}`;
+  assert.equal(authorize.searchParams.get('redirect_uri'), redirect);
+  assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
+  assert.equal(stub.registrations[0].token_endpoint_auth_method, 'none');
+  assert.match(stub.registrations[0].client_name, /^dsh-mcp-manager-/);
+  const invalid = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=synthetic-code&state=wrong`);
+  assert.match(invalid.text, /expired or invalid/);
+  assert.equal(stub.forms.length, 0, 'an invalid state must never exchange a code');
+  const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=synthetic-code&state=${authorize.searchParams.get('state')}`);
+  assert.match(callback.text, /Authorized/);
+  assert.equal(stub.forms.length, 1);
+  assert.equal(stub.forms[0].get('redirect_uri'), redirect);
+  assert.equal(stub.forms[0].get('client_id'), 'dcr-client');
+  assert.equal(stub.forms[0].get('client_secret'), null);
+  assert.equal(createHash('sha256').update(stub.forms[0].get('code_verifier')).digest('base64url'), authorize.searchParams.get('code_challenge'));
+  const view = await request(handler, 'GET', '/mcp-manager/api/servers');
+  const connected = view.json.servers.find((server) => server.id === id);
+  assert.equal(connected.status, 'connected');
+  assert.equal(connected.toolCount, 1);
+  assert.equal(state().servers.find((server) => server.id === id).oauth.clientId, 'dcr-client');
+  assert.equal(stub.registrations.length, 1, 'callback must reuse the registered redirect');
+  assert.equal((await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`)).code, 200);
+  assert.equal(stub.registrations.length, 1, 'a second login on the same origin reuses the client');
+  const changed = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host: 'localhost:3081' });
+  assert.equal(changed.code, 200, changed.text);
+  assert.equal(stub.registrations.length, 2, 'changing origin requires registration for the new exact redirect');
+  assert.deepEqual(stub.registrations[1].redirect_uris, [`http://localhost:3081/mcp-manager/callback/${id}`]);
+});
+
+it('issue #21: reports a provider metadata rejection without assuming DCR is unsupported or retrying it', async (t) => {
+  const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: 'native' });
+  t.after(() => stub.close());
+  const { handler } = makeCtx({ publicOrigins: ['http://remote.example.test:3080'] });
+  const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'rejected-web', type: 'http', url: stub.mcpUrl });
+  const id = created.json.server.id;
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host: 'remote.example.test:3080' });
+  assert.equal(auth.code, 500);
+  assert.match(auth.json.error, /HTTP 400.*invalid_client_metadata/);
+  assert.ok(!auth.json.error.includes('may not support'));
+  assert.equal(stub.registrations.length, 1, 'do not retry with another identity or application type');
+  assert.equal(stub.forms.length, 0);
+  const logs = await request(handler, 'GET', `/mcp-manager/api/servers/${id}/logs`);
+  assert.ok(logs.json.logs.some((entry) => entry.phase === 'register' && entry.status === 400 && entry.detail.includes('invalid_client_metadata')));
+});
 
 it('discovers a path-carrying authorization server and honours a manual client id', async () => {
   const stub = await startStub();
