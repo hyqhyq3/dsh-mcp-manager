@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-> Local **0.13.2 unreleased candidate**: see the [release notes](docs/release-v0.13.2.md) for cumulative changes, provenance and verification limits.
+> Local **0.13.3 unreleased candidate**: see the [release notes](docs/release-v0.13.3.md) for cumulative changes, provenance and verification limits. It supersedes [0.13.2](docs/release-v0.13.2.md).
 
 **MCP server manager for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — a Settings → MCP page where you add MCP servers once (remote HTTP or local stdio process), authenticate HTTP servers with **OAuth in the browser**, and expose their tools either directly or through a compact on-demand broker.
 
@@ -92,7 +92,7 @@ this switch on. The broker remains callable but does not shrink the generated
 SDK. DSH `0.2.0-rc.2` names its modes `native/ptc/both`; `0.2.1-rc.2` supports
 `native/ptc`. See [issue #18 investigation and isolated verification](docs/on-demand-code-mode.md)
 for the checked interfaces, safe fallbacks, context-cost measurements and test
-commands. The local 0.13.2 candidate also keeps this conservative fallback when a custom
+commands. The local 0.13.3 candidate also keeps this conservative fallback when a custom
 prompt empties `tools:sdk` but still exposes `run_code`.
 
 ### Workspace isolation
@@ -114,10 +114,10 @@ Global servers (added in **Settings → MCP**) are visible in every workspace. U
 - `type` defaults to `http`; a stdio server's `cwd` defaults to the workspace root. `headers` / `headerEnv` / `env` / `args` follow the same shapes as the Settings form.
 - A workspace server's tools register **only** into sessions whose working directory resolves to that workspace; another workspace's agents never see them. Global servers stay visible everywhere unless masked.
 - `exclude` lists global servers to hide in this workspace (their tools are masked through the tool registry's per-agent restriction). Toggle it via the **隐藏 / Hide** checkbox on each global server in the workspace view.
-- `serverName` must be unique across global + all workspace sources; a later duplicate is flagged as a conflict and skipped (shown in the UI).
+- `serverName` must be unique across global + all workspace sources; a later duplicate is flagged as a conflict and skipped (shown in the UI). A conflict is re-derived when the blocking global server is deleted or renamed, so the workspace entry connects on its own instead of waiting for a `mcp.json` edit.
 - Config is re-read on each new session and hot-reloaded via a file watcher.
 - Workspace connection failures retry automatically after 3s, 6s, 12s, up to 60s; a successful connection resets the delay. SSE session loss reconnects immediately and refreshes tools for existing agents. Credential-gated servers remain `needs-auth`. Editing/deleting a server, closing its last session, or unloading the plugin cancels pending retries.
-- Workspace **Logs** and `POST /mcp-manager/api/servers/:id/connect` work for loaded workspace servers. Logs retain redacted failure causes (such as `ECONNREFUSED`) across config rescans; deleting the server clears them.
+- Workspace **Logs** work for every row, not just loaded ones: ids are deterministic (`ws-<sha256(workspace+name)[0:20]>`), so a row listed from disk keeps the same id after it is loaded, and `GET /mcp-manager/api/servers/:id/logs` returns 200 for loaded, conflict and not-yet-loaded rows alike. `POST .../connect` reconnects loaded rows, answers 409 for a conflict row (`server name is taken by another server`), and 404 when nothing is loaded for that id. Logs retain redacted failure causes (such as `ECONNREFUSED`) across config rescans; deleting the server clears them.
 
 Recovery regression tests run with `node --test test/workspace-reconnect.test.js`. For an opt-in real Loader smoke, install `@deepseek-ai/dsh@0.2.1-rc.2` into a disposable npm prefix, then run `node scripts/verify-real-dsh.mjs <prefix>`. The script creates and deletes its own temporary profile and workspace, uses loopback MCP only, and submits no model request. Verified on macOS / Node 24.12.0; Windows remains unverified.
 - Workspace servers support **stdio**, **HTTP static-token** (`tokenEnv`), **HTTP OAuth** (the same discovery + PKCE + dynamic client registration flow as global servers, including the optional `clientId` / `clientSecretEnv` / `scope` fields in the hand-written config), and **HTTP no-auth** (`authMode: "none"`, no `Authorization` header). Workspace OAuth tokens persist in `~/.dsh/mcp-manager.json` (never in the declarative `mcp.json`); each workspace server row exposes a **去认证 / Authenticate** button for OAuth servers.

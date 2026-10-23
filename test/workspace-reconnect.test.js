@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,7 +77,7 @@ async function endpoint({ sse = false, hold = false, fail = '' } = {}) {
   };
 }
 
-function mount(t, config) {
+function mount(t, config, extraRegistry = []) {
   const dir = mkdtempSync(join(scratch, 'ws-'));
   const path = join(dir, '.dsh/dshmm/mcp.json');
   mkdirSync(join(dir, '.dsh/dshmm'), { recursive: true });
@@ -101,7 +102,7 @@ function mount(t, config) {
   const webServer = { register: route => { handler = route.handler; return () => {}; } };
   const ctx = {
     logger: { info() {}, warn() {}, error() {} }, tools: registry,
-    get: name => name === 'workspaceRegistry' ? { list: () => [{ path: dir }] } : undefined,
+    get: name => name === 'workspaceRegistry' ? { list: () => [{ path: dir }, ...extraRegistry.map(path => ({ path }))] } : undefined,
     on: () => () => {}, effect,
     inject: (names, callback) => { callback({ agents, webServer, effect }); return { dispose() {} }; },
   };
@@ -119,6 +120,8 @@ function mount(t, config) {
   return { dir, write, request, view, registered, dispose, attach: () => agents.create({}), rescan: () => agents.resume({}), release: () => { for (const fn of agentCleanup.splice(0)) fn(); } };
 }
 const config = url => ({ local: { type: 'http', url, authMode: 'none' } });
+// Mirrors workspaceServerId: sha256(`${canonicalPath}\n${name}`)[0:20].
+const workspaceId = (dir, name) => `ws-${createHash('sha256').update(`${realpathSync(dir)}\n${name}`).digest('hex').slice(0, 20)}`;
 
 it('recovers a delayed workspace endpoint, projects tools and exposes redacted diagnostics', async t => {
   const remote = await endpoint(); t.after(remote.stop);
@@ -181,6 +184,56 @@ for (const action of ['delete', 'edit', 'release', 'unload']) {
     if (action === 'edit') assert.ok(h.registered.has('mcp__local__echo'));
   });
 }
+
+it('addresses a never-loaded workspace row by the deterministic id a rescan will use', async t => {
+  const remote = await endpoint(); t.after(remote.stop);
+  const other = mkdtempSync(join(scratch, 'ws-other-'));
+  mkdirSync(join(other, '.dsh/dshmm'), { recursive: true });
+  writeFileSync(join(other, '.dsh/dshmm/mcp.json'), JSON.stringify({ mcpServers: { local: { type: 'http', url: remote.url, authMode: 'none' } } }));
+  const h = mount(t, config(remote.url), [other]);
+  await h.attach(); // loads only h.dir; `other` stays registry-only
+  const row = (await h.request('GET', '/workspaces')).workspaces.find(ws => ws.path === other).servers[0];
+  assert.equal(row.status, 'configured');
+  assert.equal(row.id, workspaceId(other, 'local'), 'a projected row must not carry a per-call random id');
+  assert.equal((await h.request('GET', `/servers/${row.id}/logs`)).code, 200);
+  assert.equal((await h.request('POST', `/servers/${row.id}/connect`)).code, 404, 'nothing is loaded to reconnect');
+  assert.equal(remote.opens(), 1, 'reading the row must not open a second connection');
+});
+
+it('answers for a name-conflict workspace row without shadowing the global server', async t => {
+  const remote = await endpoint(); t.after(remote.stop);
+  // The global server owns the name first, so the workspace entry is the one
+  // that loses: it must stay addressable and never project a second tool set.
+  const h = mount(t, config(remote.url));
+  const global = await h.request('POST', '/servers', { name: 'local', type: 'http', authMode: 'none', url: remote.url });
+  assert.equal(global.code, 201);
+  await h.attach();
+  const id = workspaceId(h.dir, 'local');
+  const conflict = await h.view();
+  assert.equal(conflict.status, 'conflict');
+  assert.equal(conflict.id, id);
+  assert.equal((await h.request('GET', `/servers/${id}/logs`)).code, 200);
+  const refused = await h.request('POST', `/servers/${id}/connect`);
+  assert.equal(refused.code, 409);
+  assert.match(refused.error, /taken by another server/);
+  assert.equal(h.registered.has('mcp__local__echo'), false, 'a conflict row must never project tools');
+  // Freeing the name must re-derive the conflict instead of leaving the entry
+  // wedged until the config file is touched.
+  assert.equal((await h.request('DELETE', `/servers/${global.server.id}`)).code, 200);
+  await until(async () => (await h.view()).status === 'connected');
+  assert.ok(h.registered.has('mcp__local__echo'), 'the workspace entry connects once the name is free');
+});
+
+it('retries a conflict workspace entry when a global rename frees its name', async t => {
+  const remote = await endpoint(); t.after(remote.stop);
+  const h = mount(t, config(remote.url));
+  const global = await h.request('POST', '/servers', { name: 'local', type: 'http', authMode: 'none', url: remote.url });
+  await h.attach();
+  assert.equal((await h.view()).status, 'conflict');
+  const renamed = await h.request('PUT', `/servers/${global.server.id}`, { name: 'other', type: 'http', authMode: 'none', url: remote.url });
+  assert.equal(renamed.code, 200, renamed.error);
+  await until(async () => (await h.view()).status === 'connected');
+});
 
 it('does not resurrect an in-flight connection after workspace release', async t => {
   const remote = await endpoint({ hold: true }); t.after(remote.stop); await remote.stop();

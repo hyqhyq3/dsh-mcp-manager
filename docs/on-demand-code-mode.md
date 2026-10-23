@@ -66,9 +66,16 @@ must include mixed modes, concurrent sessions and tools contributed by other
 plugins. Such a seam enables a reliable broker-only SDK; a text renderer alone
 does not establish that contract.
 
-No upstream tracking issue was identified by the repository searches for
-`tools:sdk`, `SDK filter`, `on-demand`, and `MCP SDK` on the check date. This is not
-a claim that no related issue exists. No upstream issue or reply was created.
+Tracking: upstream Discussion
+[#10485](https://github.com/deepseek-ai/deepseek-harness/discussions/10485)
+("PTC/code 模式：工具面裁剪 seam + 程序内子调用记账入口", Ideas category, opened
+2026-10-21 by the reporter of issue #18, still open with no maintainer reply as of
+2026-10-23) requests exactly this seam — a tool-surface trim plus an in-program
+sub-call accounting entry. It is a discussion rather than an issue because
+`deepseek-ai/deepseek-harness` has Issues disabled; Discussions is the only
+upstream surface. Related discussions found by search: #9670, #9385, #10648,
+#9143, #10163. No upstream issue, discussion or reply was created by this
+repository.
 
 ## Available fallback
 

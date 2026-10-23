@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-> 本地 **0.13.2 未发布候选**：累计改动、来源与验收边界见[发行说明](docs/release-v0.13.2.md)。
+> 本地 **0.13.3 未发布候选**：累计改动、来源与验收边界见[发行说明](docs/release-v0.13.3.md)；它取代 [0.13.2](docs/release-v0.13.2.md)。
 
 **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的 MCP 服务器管理插件** —— 在 设置 → MCP 页签里添加 MCP 服务器（远程 HTTP 或本地 stdio 进程），HTTP 服务器可在 **浏览器里完成 OAuth 登录**，工具既可直接暴露，也可通过紧凑的按需 broker 调用。
 
@@ -84,7 +84,7 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 broker 可以调用，但不会压缩生成式 SDK。DSH `0.2.0-rc.2` 的模式名为
 `native/ptc/both`，`0.2.1-rc.2` 支持 `native/ptc`。接口核实、可行降级、
 上下文字节成本与复测命令见 [#18 调查及隔离验证](docs/on-demand-code-mode.md)。
-本地 0.13.2 候选也在自定义提示词清空 `tools:sdk`、但仍暴露 `run_code` 时保留该降级，
+本地 0.13.3 候选也在自定义提示词清空 `tools:sdk`、但仍暴露 `run_code` 时保留该降级，
 避免误拦截合法子调用。
 
 ### 工作区隔离
@@ -106,10 +106,10 @@ broker 可以调用，但不会压缩生成式 SDK。DSH `0.2.0-rc.2` 的模式�
 - `type` 缺省为 `http`；stdio 服务器的 `cwd` 缺省为工作区根。`headers` / `headerEnv` / `env` / `args` 与设置页表单的格式一致。
 - 工作区服务器的工具**只**注册进「工作目录解析到该工作区」的会话；其他工作区的 agent 看不到它们。全局服务器除非被屏蔽，否则处处可见。
 - `exclude` 列出要在此工作区隐藏的全局服务器（通过工具注册表的按 agent 限制屏蔽其工具）。在工作区视图里点每条全局服务器上的**隐藏**复选框即可切换。
-- `serverName` 在「全局 + 所有工作区来源」之间必须唯一；重复的名称会被标记为冲突并跳过（UI 里可见）。
+- `serverName` 在「全局 + 所有工作区来源」之间必须唯一；重复的名称会被标记为冲突并跳过（UI 里可见）。当占用该名称的全局服务器被删除或改名后，冲突状态会重新判定，工作区条目自行连上，不必再等一次 `mcp.json` 改动。
 - 配置在每个新会话时重读，并通过文件监听热更新。
 - 工作区连接失败后按 3s、6s、12s 递增重试，上限 60s，成功后重置。SSE 会话断流会立即重连，并为已有 agent 更新工具；缺少凭据的服务器保持 `needs-auth`。编辑/删除服务器、关闭最后一个工作区会话或卸载插件时会取消待执行的重试。
-- 已加载工作区服务器支持 **日志** 和 `POST /mcp-manager/api/servers/:id/connect`。日志保留脱敏后的底层失败原因（如 `ECONNREFUSED`），配置重扫后仍可查看，删除服务器时清除。
+- 工作区 **日志** 对每一行都可用，而不只是已加载的那些：id 是确定性的（`ws-<sha256(工作区+名称)[0:20]>`），因此从磁盘列出的条目在加载后仍是同一个 id，`GET /mcp-manager/api/servers/:id/logs` 对已加载、冲突与尚未加载的条目一律返回 200。`POST .../connect` 对已加载条目执行重连，对冲突条目返回 409（`server name is taken by another server`），该 id 无已加载连接时返回 404。日志保留脱敏后的底层失败原因（如 `ECONNREFUSED`），配置重扫后仍可查看，删除服务器时清除。
 
 恢复回归测试：`node --test test/workspace-reconnect.test.js`。真实 Loader 冒烟验证为手动启用：先将 `@deepseek-ai/dsh@0.2.1-rc.2` 安装到临时 npm prefix，再运行 `node scripts/verify-real-dsh.mjs <prefix>`。脚本会自行创建并删除临时 profile 和工作区，仅访问 loopback MCP，不发起模型请求。已在 macOS / Node 24.12.0 验证，Windows 尚未验证。
 - 工作区服务器支持 **stdio**、**HTTP 静态 token**（`tokenEnv`）、**HTTP OAuth**（与全局服务器相同的发现 + PKCE + 动态客户端注册流程，手写配置同样支持可选的 `clientId` / `clientSecretEnv` / `scope`）与 **HTTP 无鉴权**（`authMode: "none"`，不发 `Authorization` 头）。工作区 OAuth token 持久化在 `~/.dsh/mcp-manager.json`（绝不写进声明式的 `mcp.json`）；每条工作区 OAuth 服务器行都有「去认证」按钮。
