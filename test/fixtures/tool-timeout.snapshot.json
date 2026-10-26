@@ -1,0 +1,10 @@
+[
+  { "case": "broker", "text": "finished" },
+  { "case": "http", "timeout": 65000, "text": "finished" },
+  { "case": "http-profile-default", "error": "MCP request timeout after 1000ms" },
+  { "case": "sse", "timeout": 65000, "text": "finished" },
+  { "case": "sse-profile-default", "error": "MCP tools/call timeout after 1000ms (no SSE reply)" },
+  { "case": "stdio", "timeout": 65000, "text": "finished" },
+  { "case": "stdio-profile-default", "error": "stdio tools/call timeout after 1000ms" },
+  { "case": "workspace-edit", "timeout": 1000, "error": "MCP request timeout after 1000ms" }
+]

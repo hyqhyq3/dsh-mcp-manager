@@ -187,6 +187,36 @@ it('collects manual OAuth client credentials only while OAuth is selected', asyn
   assert.doesNotMatch(text(tree), /Client secret environment variable name/);
 });
 
+it('edits and clears tool-call timeouts for both transports and scopes', async () => {
+  for (const scope of ['user', 'workspace']) {
+    for (const type of ['http', 'stdio']) {
+      const calls = [];
+      const app = mount(async (url, options) => { calls.push({ url, options }); return response({}); });
+      let tree = app.render();
+      nodes(tree).find(node => node.props['aria-label'] === 'Add MCP server').props.onClick();
+      const form = content(app.render());
+      app.reset();
+      const props = { ...form.props, scope, workspacePath: '/workspace', initial: { id: 'test', name: 'test', type, timeout: 600000 } };
+      tree = app.render(form.type, props);
+      const input = nodes(tree).find(node => node.props.type === 'number');
+      assert.equal(input.props.value, 600000);
+      assert.equal(input.props.min, 1000);
+      assert.equal(input.props.step, 1000);
+      assert.match(text(tree), /Tool-call timeout \(ms, optional\)/);
+      for (const value of ['120000', '']) {
+        input.props.onChange({ target: { value } });
+        tree = app.render(form.type, props);
+        await nodes(tree).find(node => node.type === 'button' && text(node) === 'Save').props.onClick();
+        const submitted = calls.findLast(call => call.options.method === 'PUT');
+        assert.equal(JSON.parse(submitted.options.body).timeout, value);
+        assert.ok(submitted.url.endsWith(scope === 'workspace' ? '/workspaces/servers' : '/servers/test'));
+      }
+      app.setLocale('zh');
+      assert.match(text(app.render(form.type, props)), /工具调用超时/);
+    }
+  }
+});
+
 it('shows a collapsed connection error and lazily loads the attempt log', async () => {
   const calls = [];
   const server = { id: 'srv-1', name: 'github', type: 'http', url: 'https://api.githubcopilot.com/mcp/', authMode: 'oauth', status: 'error', error: 'client registration failed: HTTP 404 — this authorization server may not support dynamic client registration', toolCount: 0, enabled: true };
@@ -229,4 +259,3 @@ it('shows a collapsed connection error and lazily loads the attempt log', async 
   assert.ok(calls.some((url) => url.endsWith('/servers/srv-1/logs')), 'the toggle must fetch the log');
   assert.match(text(log), /authorization server metadata/);
 });
-

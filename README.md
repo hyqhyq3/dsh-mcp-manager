@@ -68,6 +68,38 @@ Then restart `dsh --profile web` and refresh the page. The package declares a `d
 
 Status badges: `connected (N tools)` / `needs-auth` / `authorizing` / `error` / `disabled`. Buttons: authenticate, edit, enable/disable (switch), delete. A non-empty error is also shown as a one-line summary under the server name while the card is collapsed, and the expanded card offers **日志 / Logs**. **Disable** unregisters that server's tools and drops its connection (config and OAuth tokens persist); **Enable** reconnects without re-authenticating. Disabled servers stay dormant across restarts. The toggle is global: it affects every session in this profile. State persists at `~/.dsh/mcp-manager.json` (server configs + OAuth client registrations + tokens; static tokens are referenced by env-var name, not stored).
 
+### Tool-call timeouts
+
+Since v0.14.0, the add/edit form has an optional **Tool-call timeout (ms)** for
+both HTTP and stdio servers, in user and workspace scope. For example, `600000`
+allows a simulation tool to run for ten minutes. Clear the input to inherit the
+default. The same field works in `<workspace>/.dsh/dshmm/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "simulation": {
+      "type": "http",
+      "url": "http://127.0.0.1:9316/mcp",
+      "authMode": "none",
+      "timeout": 600000
+    }
+  }
+}
+```
+
+Resolution order: server `timeout`, then the plugin row's
+`config.toolCallTimeoutMs`, then `60000` milliseconds. Values must be finite and
+at least `1000`; numeric strings are accepted and fractions are floored. Invalid,
+empty, or missing values are treated as unset. PUT clears the server override
+when `timeout` is omitted or invalid. Disabling a server preserves its override.
+
+The override applies only to `tools/call` over stdio, Streamable HTTP, and legacy
+HTTP-with-SSE. Initialization, tool listing, and notifications keep their existing
+60-second defaults. Timeout errors include the elapsed budget; a client timeout
+does not guarantee that a remote server has stopped its work. A surrounding
+Code/PTC runtime may impose its own deadline.
+
 ### What the agent sees
 
 With on-demand mode off (the default), every connected server's tools appear as first-class tools, e.g. for a server named `odin`:
@@ -155,7 +187,7 @@ attempts cannot restore tools or clear a newer connection.
 Releases are immutable and tagged, so consumers can pin one:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.13.1
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.14.0
 ```
 
 The DSH STORE catalog additionally pins a full 40-character commit instead of a floating branch (release 0.12.0 = `b029407ca3d258e83abac6c06ff94f92e5687164`; the store re-pins the newest release after each push).
@@ -177,6 +209,17 @@ For 0.13.0, the HTTP-with-SSE transport, its reconnect/backoff path, and per-too
 For 0.13.0, the discovery chain, manual `clientId`/`clientSecretEnv`/`scope` handling, the no-DCR error path, attempt-log redaction, and the stdio stderr tail are covered by `test/oauth-discovery.test.js`, which runs the real `apply()` API against a local stub server that reproduces the GitHub MCP topology (401 + `resource_metadata` pointer, path-carrying authorization server, no `registration_endpoint`) — plus `test/client-language.test.js` for the collapsed error and the lazily loaded log panel. A real GitHub OAuth round trip is **not** verified: it needs a registered GitHub OAuth App, and the stub stands in for that authorization server. The manual-client path has not been exercised in a live profile.
 
 Next gate: a real-profile readback (resolved version, running process, visible Settings → MCP page) plus, for distribution, an unauthenticated readback of the tagged artifacts. Until those are recorded, read the compatibility declarations as disposable-profile verification only — not as proof of a live installation. The same applies to listing status on DSH STORE.
+
+For v0.14.0, `test/tool-timeout.test.js` covers budget validation, large-timer
+overflow, configuration round trips, workspace rescans, and actual timeout and
+success paths over all three transports. The client test covers both locales,
+transports, and scopes. `node scripts/verify-timeout-dsh.mjs <prefix>` runs the
+real DSH 0.2.1-rc.2 Loader, agents, tool registry, and native-mode broker against
+loopback MCP fixtures: all three transports and the broker complete 61-second
+calls with a 65-second budget, then clearing overrides restores the tested
+one-second profile default. The assembled results are checked against a keyless
+snapshot. See [v0.14.0 verification](docs/release-v0.14.0.md) for evidence and
+remaining platform boundaries. This does not expand the compatibility matrix.
 
 ## Limitations
 

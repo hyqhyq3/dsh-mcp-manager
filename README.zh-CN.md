@@ -61,6 +61,34 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-mana
 
 状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。按钮：去认证、编辑、启用/禁用（开关）、删除。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要，展开后可用 **日志 / Logs**。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
 
+### 工具调用超时
+
+从 v0.14.0 起，新增和编辑表单提供可选的**工具调用超时（毫秒）**，同时支持
+HTTP、stdio，以及用户和工作区作用域。例如，`600000` 允许仿真工具运行十分钟。
+清空输入框后恢复继承默认值。也可以在 `<workspace>/.dsh/dshmm/mcp.json` 中配置：
+
+```json
+{
+  "mcpServers": {
+    "simulation": {
+      "type": "http",
+      "url": "http://127.0.0.1:9316/mcp",
+      "authMode": "none",
+      "timeout": 600000
+    }
+  }
+}
+```
+
+优先级为：服务器的 `timeout` → 插件行的 `config.toolCallTimeoutMs` → `60000`
+毫秒。数值必须有限且至少为 `1000`；接受数字字符串，小数向下取整。无效值、空值
+或缺失值都视为未设置。PUT 时省略 `timeout` 或传入无效值会清除服务器覆盖值。
+禁用服务器会保留该配置。
+
+覆盖值仅用于 stdio、Streamable HTTP 和旧式 HTTP-with-SSE 的 `tools/call`。
+初始化、工具列表和通知仍保留原有的 60 秒默认时限。超时报错包含具体预算；客户端
+超时不保证远端服务器已停止任务。外层 Code/PTC 运行时可能另有自己的时限。
+
 ### Agent 看到什么
 
 按需模式关闭时（默认），每个已连接服务器的工具以一等工具出现，例如名为 `odin` 的服务器：
@@ -146,7 +174,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 发行版不可变且带 tag，消费者可以固定到某个版本：
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.13.1
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.14.0
 ```
 
 DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.12.0 发行 = `b029407ca3d258e83abac6c06ff94f92e5687164`；每次推送后由商城重新固定最新发行版）。
@@ -168,6 +196,14 @@ DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.
 0.13.0 的发现链、手动 `clientId`/`clientSecretEnv`/`scope`、不支持 DCR 时的报错、日志脱敏与 stdio stderr 尾部，由 `test/oauth-discovery.test.js` 覆盖：它用本地 stub 服务器复刻 GitHub MCP 的拓扑（401 + `resource_metadata` 指针、带路径的授权服务器、无 `registration_endpoint`），并跑真实的 `apply()` API；折叠错误摘要与按需加载的日志面板由 `test/client-language.test.js` 覆盖。**真实 GitHub OAuth 往返未验证**——它需要注册 GitHub OAuth App，本仓库用 stub 代替该授权服务器。手动 Client ID 路径也尚未在真实 Profile 中实测。
 
 下一个门禁：真实 Profile 的回读（解析出的版本、运行进程、设置 → MCP 页面可见），以及在分发场景下对已打 tag 产物的免登录回读。在这些证据补齐之前，兼容性声明只代表一次性 Profile 的验证结果，**不代表**你的实际安装已被验证；DSH STORE 的上架状态同理。
+
+v0.14.0 的 `test/tool-timeout.test.js` 覆盖预算校验、超大计时器溢出、配置往返、
+工作区重扫，以及三种传输的实际成功和超时路径。客户端测试覆盖两种语言、两种
+传输类型和两种作用域。`node scripts/verify-timeout-dsh.mjs <prefix>` 使用真实的
+DSH 0.2.1-rc.2 Loader、agent、工具注册表和 native 模式 broker，对接 loopback MCP
+夹具：三种传输和 broker 均在 65 秒预算内完成 61 秒调用，清除覆盖值后恢复到实测的
+1 秒 profile 默认值；组装后的结果与无密钥快照比对。证据和平台边界见
+[v0.14.0 验证记录](docs/release-v0.14.0.md)。本次不扩展兼容性声明矩阵。
 
 ## 已知限制
 
