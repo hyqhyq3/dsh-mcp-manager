@@ -259,3 +259,57 @@ it('shows a collapsed connection error and lazily loads the attempt log', async 
   assert.ok(calls.some((url) => url.endsWith('/servers/srv-1/logs')), 'the toggle must fetch the log');
   assert.match(text(log), /authorization server metadata/);
 });
+
+it('shows the localized insufficient-scope message and a scoped re-auth button', async () => {
+  const globalServer = {
+    id: 'srv-scope', name: 'trypost', type: 'http', url: 'https://post.mrbean.dev/mcp/trypost',
+    authMode: 'oauth', status: 'needs-auth', toolCount: 0, enabled: true,
+    error: 'insufficient scope (requires: mcp:use): re-authenticate to grant access',
+    oauth: { insufficientScope: { scope: 'mcp:use' } },
+  };
+  const workspaceServer = {
+    id: 'ws-scope', name: 'ws-trypost', type: 'http', url: 'https://post.mrbean.dev/mcp/ws',
+    authMode: 'oauth', status: 'needs-auth', toolCount: 0,
+    error: 'insufficient scope (requires: posts:write): re-authenticate to grant access',
+    insufficientScope: { scope: 'posts:write' },
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [globalServer] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [{ path: '/ws', servers: [workspaceServer], exclude: [], error: '' }] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+
+  const globalNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-scope');
+  assert.ok(globalNode, 'the governed server row renders');
+  // Expanding the card is where the re-auth action lives.
+  const expanded = { type: globalNode.type, props: { ...globalNode.props, open: true } };
+  // The workspace row only exists after selecting its workspace.
+  nodes(tree).find((node) => node.props?.className === 'mm_wsSelect').props.onChange({ target: { value: '/ws' } });
+  tree = app.render();
+  const workspaceNode = nodes(tree).find((node) => node.props?.server?.id === 'ws-scope');
+  assert.ok(workspaceNode, 'the workspace server row renders');
+
+  const primaryButton = (rendered) => nodes(rendered).find((node) => node.type === 'button' && node.props.className === 'mm_btn primary');
+  const renderRow = (node) => { app.reset(); return app.render(node.type, node.props); };
+
+  // The global row carries oauth.insufficientScope; the raw host error is
+  // replaced by the localized message and the scoped re-auth button.
+  let row = renderRow(expanded);
+  assert.match(text(row), /Insufficient scope: the token lacks the required scope \(mcp:use\)\./);
+  assert.doesNotMatch(text(row), /insufficient scope \(requires:/, 'the raw host error is not duplicated');
+  assert.equal(text(primaryButton(row)), 'Re-authenticate with scopes');
+
+  // Workspace rows carry the same data top-level and follow the same locale.
+  app.setLocale('zh');
+  row = renderRow(workspaceNode);
+  assert.match(text(row), /权限范围不足：令牌缺少所需的 scope \(posts:write\)。/);
+  assert.equal(text(primaryButton(row)), '重新认证并授予权限');
+
+  app.setLocale('en');
+  row = renderRow(expanded);
+  assert.match(text(row), /Insufficient scope: the token lacks the required scope \(mcp:use\)\./);
+});
