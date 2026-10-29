@@ -23,7 +23,7 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
   - **Manual client credentials** for authorization servers that do not support dynamic registration (GitHub's does not): set **Client ID** to an app you registered with the provider, optionally a **Client secret environment variable** name (sent as `client_secret`; the secret itself is never persisted), and a **Scopes** string.
   - **Scope selection** (MCP authorization spec): the authorize request carries `scope` from, in order, the **Scopes** field (or a hand-edited `oauth.scope` in `~/.dsh/mcp-manager.json`), the `scope` in the server's 401 `WWW-Authenticate` challenge, the protected-resource metadata's `scopes_supported` (RFC 9728), then the authorization server's `scopes_supported` (RFC 8414). When none is advertised no scope is sent. `resource=<MCP server URL>` (RFC 8707) goes on both the authorize and token requests whenever the protected-resource metadata names it.
   - **Insufficient scope**: when an authenticated request gets `403` or `WWW-Authenticate: Bearer error="insufficient_scope", scope="…"`, the server shows *Insufficient scope (scopes)* instead of the raw `initialize HTTP 403`, and offers a **Re-authenticate with scopes** button. The next authorization adds the scopes the server asked for. (On a single `tools/call`, only an explicit `insufficient_scope` triggers this; a bare 403 there is treated as that tool's own denial.)
-  - **External edits**: every write re-reads `~/.dsh/mcp-manager.json` under a file lock and merges field by field, so hand edits made while DSH runs are kept. Starting an authorization also re-reads the server's `scope` / `clientId` / `clientSecretEnv` / `oauth.scope` from disk.
+  - **External edits**: every write re-reads `~/.dsh/mcp-manager.json` under a file lock and merges field by field, so hand edits made while DSH runs are kept. Starting an authorization also re-reads a global server's `scope` / `clientId` / `clientSecretEnv` / `oauth.scope` from disk (workspace servers take those fields from the workspace `mcp.json`).
 - **Static Bearer token** mode for servers without OAuth — stored as an environment-variable **name** (Codex-style `tokenEnv`), never as plaintext in the config.
 - **No auth** mode for servers that need no credentials at all (e.g. a local `http://127.0.0.1:9316/mcp`) — the plugin sends no `Authorization` header and connects on save.
 - **Custom HTTP headers** (`headers` for direct values, `headerEnv` for values read from environment variables) — matches Codex's `http_headers` / `env_http_headers`.
@@ -64,7 +64,7 @@ Then restart `dsh --profile web` and refresh the page. The package declares a `d
    - **Scope (作用域)**: `user` — a global server available in every workspace; or `workspace` — a server bound to one workspace (its config lives in that workspace's `.dsh/dshmm/mcp.json`). Pick the workspace from the second dropdown.
    - **HTTP**: name (becomes the `mcp__<name>__*` prefix), URL, auth mode (OAuth, static token, or no auth), and optional headers (`headers` direct values, `headerEnv` values read from env vars). In OAuth mode you can additionally pre-register the client: **Client ID**, **Client secret environment variable**, and **Scopes** (all optional; leave Scopes empty to use what the server advertises).
    - **stdio**: name, command (e.g. `npx`), args (one per row), env vars (key/value rows), and optional working directory.
-3. OAuth servers: click **去认证 (Authenticate)** → the browser opens the server's login page → after consent you are redirected back and the tools are registered immediately. If the authorization server advertises a `registration_endpoint` the plugin registers itself (RFC 7591) and you can leave Client ID empty. If it does not — GitHub's `https://github.com/login/oauth` is the common case — register an OAuth App with the provider, paste its **Client ID** (and the **name of the environment variable** holding its secret, if it is a confidential client), set **Scope** to what the MCP endpoint needs (e.g. `repo read:org`), and whitelist `http://127.0.0.1:<port>/mcp-manager/callback/<id>` as the redirect URI there. Without a Client ID the attempt fails with an explanation rather than a bare `HTTP 404`, and the **Logs** panel lists every URL that was tried.
+3. OAuth servers: click **去认证 (Authenticate)** → the browser opens the server's login page → after consent you are redirected back and the tools are registered immediately. If the authorization server advertises a `registration_endpoint` the plugin registers itself (RFC 7591) and you can leave Client ID empty. If it does not — GitHub's `https://github.com/login/oauth` is the common case — register an OAuth App with the provider, paste its **Client ID** (and the **name of the environment variable** holding its secret, if it is a confidential client), set **Scopes** to what the MCP endpoint needs (e.g. `repo read:org`), and whitelist `http://127.0.0.1:<port>/mcp-manager/callback/<id>` as the redirect URI there. Without a Client ID the attempt fails with an explanation rather than a bare `HTTP 404`, and the **Logs** panel lists every URL that was tried.
 4. Static-token servers: enter the **name of an environment variable** that holds the token (e.g. `MCP_BEARER_TOKEN`) — the token itself is never written to disk; stdio servers spawn and connect immediately on save.
 5. No-auth servers: pick **No auth (server needs no credentials)** — the plugin sends no `Authorization` header and connects on save. Use it for an endpoint that authenticates nothing (for example a local `http://127.0.0.1:9316/mcp`).
 6. Optional: turn on **On-demand MCP tool calls** at the top of the page. The setting is profile-wide, persists across restarts, and affects existing sessions on their next request.
@@ -190,7 +190,7 @@ attempts cannot restore tools or clear a newer connection.
 Releases are immutable and tagged, so consumers can pin one:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.14.0
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.15.0
 ```
 
 The DSH STORE catalog additionally pins a full 40-character commit instead of a floating branch (release 0.12.0 = `b029407ca3d258e83abac6c06ff94f92e5687164`; the store re-pins the newest release after each push).
@@ -210,6 +210,18 @@ For 0.12.0, the no-auth mode is covered by the stubbed `apply()` API test (an un
 For 0.13.0, the HTTP-with-SSE transport, its reconnect/backoff path, and per-tool concurrency safety are covered by `test/sse-basic.test.js`, `test/sse-reconnect.test.js`, and `test/concurrency-safety.test.js`.
 
 For 0.13.0, the discovery chain, manual `clientId`/`clientSecretEnv`/`scope` handling, the no-DCR error path, attempt-log redaction, and the stdio stderr tail are covered by `test/oauth-discovery.test.js`, which runs the real `apply()` API against a local stub server that reproduces the GitHub MCP topology (401 + `resource_metadata` pointer, path-carrying authorization server, no `registration_endpoint`) — plus `test/client-language.test.js` for the collapsed error and the lazily loaded log panel. A real GitHub OAuth round trip is **not** verified: it needs a registered GitHub OAuth App, and the stub stands in for that authorization server. The manual-client path has not been exercised in a live profile.
+
+For v0.15.0, `test/oauth-scope.test.js` covers the scope-selection order
+(configured → 401 challenge → RFC 9728 → RFC 8414 → none), `resource` on the
+authorize and token requests, recovery from a bare 403 and from
+`insufficient_scope` on both transports, and the case where the 403 challenge
+names only the missing scopes — the step-up must extend the advertised base, not
+replace it. `test/client-language.test.js` renders the localized
+insufficient-scope message and the **Re-authenticate with scopes** button for
+the global and workspace row shapes in both locales. A real
+TryPost/Laravel-Passport browser consent round trip and Windows remain
+unverified; see [v0.15.0 verification](docs/release-v0.15.0.md). This does not
+expand the compatibility matrix.
 
 Next gate: a real-profile readback (resolved version, running process, visible Settings → MCP page) plus, for distribution, an unauthenticated readback of the tagged artifacts. Until those are recorded, read the compatibility declarations as disposable-profile verification only — not as proof of a live installation. The same applies to listing status on DSH STORE.
 
