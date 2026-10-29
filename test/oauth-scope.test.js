@@ -81,6 +81,10 @@ function startStub({
   challengeScope = '',
   required = ['mcp:use'],
   insufficientHeader = false,
+  // What the 403 `insufficient_scope` challenge names. RFC 6750 leaves this as
+  // the scope required for the request, which a server may report as the
+  // *missing* scopes only rather than the full required set.
+  missingScopes = required,
 } = {}) {
   const authorizeScopes = [];
   const tokenForms = [];
@@ -113,7 +117,7 @@ function startStub({
         const granted = tokens.get(token);
         if (!required.every((scope) => granted.includes(scope))) {
           const headers = insufficientHeader
-            ? { 'WWW-Authenticate': `Bearer error="insufficient_scope", scope="${required.join(' ')}", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp/trypost"` }
+            ? { 'WWW-Authenticate': `Bearer error="insufficient_scope", scope="${missingScopes.join(' ')}", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp/trypost"` }
             : {};
           return send(403, { message: 'MCP OAuth authorization required.' }, headers);
         }
@@ -301,6 +305,30 @@ it('steps up with the scope named by an insufficient_scope challenge', async (t)
   assert.match(row.error, /insufficient scope \(requires: mcp:use posts:write\)/);
   const url = await login(handler, stub, id);
   assert.equal(url.searchParams.get('scope'), 'mcp:use posts:write');
+  await request(handler, 'POST', `/mcp-manager/api/servers/${id}/connect`);
+  assert.equal((await view(handler, id)).status, 'connected');
+});
+
+it('adds a challenge that names only the missing scopes to the advertised base', async (t) => {
+  // The 403 challenge names only the delta; the RFC 9728 scopes_supported set
+  // must survive, or the re-authorization still cannot initialize and the user
+  // is trapped in a re-auth loop.
+  const stub = await startStub({
+    resourceScopes: ['mcp:use'],
+    required: ['mcp:use', 'posts:write'],
+    insufficientHeader: true,
+    missingScopes: ['posts:write'],
+  });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const id = await addServer(handler, stub);
+  await login(handler, stub, id);
+  await request(handler, 'POST', `/mcp-manager/api/servers/${id}/connect`);
+  const row = await view(handler, id);
+  assert.equal(row.status, 'needs-auth');
+  assert.match(row.error, /insufficient scope \(requires: posts:write\)/);
+  const url = await login(handler, stub, id);
+  assert.equal(url.searchParams.get('scope'), 'mcp:use posts:write', 'delta challenge extends the base selection');
   await request(handler, 'POST', `/mcp-manager/api/servers/${id}/connect`);
   assert.equal((await view(handler, id)).status, 'connected');
 });
