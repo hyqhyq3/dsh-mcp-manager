@@ -169,7 +169,7 @@ it('collects manual OAuth client credentials only while OAuth is selected', asyn
 
   assert.match(text(tree), /OAuth Client ID/);
   assert.match(text(tree), /Client secret environment variable name/);
-  assert.match(text(tree), /Scope \(optional/);
+  assert.match(text(tree), /Scopes \(optional/);
   const inputs = nodes(tree).filter((node) => node.type === 'input');
   const clientIdInput = inputs.find((node) => node.props.placeholder === 'Ov23li…');
   const secretInput = inputs.find((node) => node.props.placeholder === 'GITHUB_OAUTH_CLIENT_SECRET');

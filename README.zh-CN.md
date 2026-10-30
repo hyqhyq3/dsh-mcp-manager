@@ -13,7 +13,10 @@
   - **回调 origin**：直接访问接受 loopback `Host`（包括 `[::1]:端口`）。反向代理通过 `publicOrigins` 配置显式白名单；只有一个 origin 时，它就是默认回调地址，无需转发头。配置多个 origin 时，完整的 `X-Forwarded-Proto` / `X-Forwarded-Host` 必须匹配白名单。无默认配置时拒绝外部 Host；格式非法的转发 Host 返回错误。回调页对消息进行 HTML 转义。
   - **RFC 8707 `resource`**：从受保护资源元数据读取，并传给授权、换取 token 和刷新请求；提供方不发布该值时不自行猜测。
   - **发现链**按 RFC 9728 → RFC 8414 顺序：MCP 端点 401 响应里的 `WWW-Authenticate` 指向受保护资源元数据，该文档再指出授权服务器，最后按 RFC 8414 的「路径插值」URL 读取授权服务器元数据（如 `https://github.com/.well-known/oauth-authorization-server/login/oauth`）。只有完全发现不到时才回退到猜测 `${origin}/oauth/*`，且日志里会说明这是猜的。
-  - **手动客户端凭据**：适配不支持动态注册的授权服务器（GitHub 就不支持）——填 **Client ID**（你在提供方注册的应用），可选填 **Client Secret 环境变量名**（作为 `client_secret` 发送，密钥本身绝不落盘），以及 **Scope**。
+  - **手动客户端凭据**：适配不支持动态注册的授权服务器（GitHub 就不支持）——填 **Client ID**（你在提供方注册的应用），可选填 **Client Secret 环境变量名**（作为 `client_secret` 发送，密钥本身绝不落盘），以及 **Scopes**。
+  - **Scope 选择**（遵循 MCP 授权规范）：授权请求的 `scope` 依次取自：**Scopes** 字段（或在 `~/.dsh/mcp-manager.json` 中手动填写的 `oauth.scope`）→ 服务器 401 `WWW-Authenticate` 里的 `scope` → 受保护资源元数据的 `scopes_supported`（RFC 9728）→ 授权服务器的 `scopes_supported`（RFC 8414）；都没有时不发送 scope。只要受保护资源元数据给出了资源标识，授权和换取 token 两个请求都会带上 `resource=<MCP 服务器 URL>`（RFC 8707）。
+  - **权限范围不足**：已认证的请求若返回 `403`，或 `WWW-Authenticate: Bearer error="insufficient_scope", scope="…"`，服务器会显示「权限范围不足（所需 scope）」而不是原始的 `initialize HTTP 403`，并提供「重新认证并授予权限」按钮；下次授权会追加服务器要求的 scope。（单次 `tools/call` 只有明确的 `insufficient_scope` 才触发此流程，单纯的 403 视为该工具自身的拒绝。）
+  - **外部编辑**：每次写入都会在文件锁下重新读取 `~/.dsh/mcp-manager.json` 并按字段合并，DSH 运行期间的手动修改不会被覆盖；开始授权时也会从磁盘重新读取该服务器的 `scope` / `clientId` / `clientSecretEnv` / `oauth.scope`。
 - **静态 Bearer Token** 模式：适配没有 OAuth 的服务器——以环境变量**名称**（Codex 风格 `tokenEnv`）引用，token 明文不落盘。
 - **无鉴权**模式：适配完全不需要凭据的服务器（例如本机 `http://127.0.0.1:9316/mcp`）——插件不发送 `Authorization` 头，保存后直接连接。
 - **自定义 HTTP 标头**：`headers`（直接值）+ `headerEnv`（值取自环境变量），对齐 Codex 的 `http_headers` / `env_http_headers`。
@@ -52,7 +55,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-mana
 1. 打开 DSH Web UI 的 **设置 → MCP**。
 2. **＋ 添加 MCP 服务器**（之后可用 **编辑** 修改）：
    - **作用域 Scope**：`user` = 全局服务器（所有工作区可用）；`workspace` = 绑定到某个工作区（配置写入该工作区的 `.dsh/dshmm/mcp.json`），从第二个下拉框选择工作区。
-   - **HTTP**：名称（决定 `mcp__<name>__*` 前缀）、URL、认证方式（OAuth、静态 token 或无鉴权）、可选标头（`headers` 直接值、`headerEnv` 值取自环境变量）。OAuth 模式下还可预注册客户端：**Client ID**、**Client Secret 环境变量名**、**Scope**（均为可选）。
+   - **HTTP**：名称（决定 `mcp__<name>__*` 前缀）、URL、认证方式（OAuth、静态 token 或无鉴权）、可选标头（`headers` 直接值、`headerEnv` 值取自环境变量）。OAuth 模式下还可预注册客户端：**Client ID**、**Client Secret 环境变量名**、**Scopes**（均为可选；Scopes 留空则使用服务器公布的 scope）。
    - **stdio**：名称、命令（如 `npx`）、参数（逐行填写）、环境变量（键/值逐行）、可选工作目录。
 3. OAuth 服务器：点 **去认证** → 浏览器打开登录页 → 同意授权后跳回，工具立即注册。若授权服务器公布了 `registration_endpoint`，插件会自行注册（RFC 7591），Client ID 可以留空；若没有——GitHub 的 `https://github.com/login/oauth` 就是常见情况——请在提供方注册一个 OAuth App，填入其 **Client ID**（若是机密客户端，再填**存放 secret 的环境变量名**），把 **Scope** 设成 MCP 端点需要的范围（如 `repo read:org`），并在提供方处把 `http://127.0.0.1:<port>/mcp-manager/callback/<id>` 加进重定向白名单。不填 Client ID 时，失败会给出解释而不是一句 `HTTP 404`，**日志**面板会列出所有试过的 URL。
 4. 静态 token 服务器：填写**存放 token 的环境变量名**（如 `MCP_BEARER_TOKEN`）——token 本身不写入磁盘；stdio 服务器保存后立即拉起本地进程并连接。
