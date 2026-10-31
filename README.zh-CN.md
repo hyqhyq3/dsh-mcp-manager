@@ -26,7 +26,7 @@
 - **界面内诊断**：失败的服务器在**折叠状态**就显示失败原因（无需展开），展开后还有 **日志 / Logs** 面板——按需加载、已脱敏的轨迹，覆盖每一次发现 URL 与 HTTP 状态、客户端注册、授权跳转、token 交换/刷新、`initialize`、`tools/list`，以及 stdio 子进程退出时的 stderr 尾部。脱敏在**写入时**完成（Bearer 值、`code`/`state`、`client_secret`、token 一律剥掉），而不是渲染时。
 - **工具注册**：与内置客户端相同的 `mcp__<server>__<rawName>` 命名约定，含 DSH 工具注册表的严格 schema 清洗，并标记 `isConcurrencySafe`。
 - **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话，还可按工作区屏蔽指定的全局服务器。
-- **可选按需 broker**：模型侧固定只暴露 `mcp_search_tools`、`mcp_describe_tool`、`mcp_execute_tool`，不再每轮发送所有 `mcp__*` schema。默认关闭，必须手动开启。 `mcp_search_tools` 是零依赖词法排序器（BM25 + CJK/别名/模糊，且支持列目录兜底）。
+- **可选按需 broker**：模型侧固定只暴露 `mcp_search_tools`、`mcp_describe_tool`、`mcp_execute_tool`，不再每轮发送所有 `mcp__*` schema。默认关闭，必须手动开启。 `mcp_search_tools` 是零依赖词法排序器（BM25 + CJK/别名/模糊，且支持列目录兜底）。DSH 0.2 及更新版本用注册表的 `deferLoading` 标记隐藏直连工具，更老的 harness 则在提示词瀑布里过滤。
 - **稳定刷新工具列表**：stdio 与 Streamable HTTP 收到 `notifications/tools/list_changed` 后，只更新新增、删除或 schema 变化的注册，未变化工具保持挂载。
 
 MCP 界面通过 `mcp` locale 命名空间跟随 DSH 在**设置 → 通用 → 语言**中的语言偏好。浏览器回退、偏好持久化和实时语言更新均由 DSH 管理；插件不再提供独立语言选择器或语言 API。标签、表单、状态徽标和确认提示均支持双语；服务器返回的诊断信息保持原文。`~/.dsh/mcp-manager.json` 中遗留的 `language` 值会被忽略并原样保留。
@@ -37,7 +37,7 @@ MCP 界面通过 `mcp` locale 命名空间跟随 DSH 在**设置 → 通用 → 
 
 - DeepSeek Harness；设置 → MCP 页面需要 web profile（`npx @deepseek-ai/dsh web`）。在没有 GUI webserver 的 profile（headless/tui）上，插件仍会注册 MCP 工具并连接服务器，只是没有设置页。
 - Node.js `^22.19` 或 `>=24`；`PATH` 里有 pnpm
-- 已验证的 DSH 版本在 `package.json` → `dsh.compatibility.dshReleases` 中逐条声明（`0.1.2-rc.1`、`0.1.5-alpha.1`、`0.1.5-alpha.2`、`0.1.5-rc.1` 为 `compatible`；支持范围 `>=0.1.2-rc.1 <0.2.0`）。未列出的版本是未经测试，不代表不兼容。上述声明来自一次性 Profile 实测：装进临时 `$DSH_HOME`，启动 `web` profile（`GET /mcp-manager/api/ping` 返回 200）、启动 `headless` profile 并确认 agent setup 生效（`0.1.5-*` 上还可确认 agent 能看到注册的 `mcp__<服务器>__<工具>`），随后删除该 Profile——全程不碰真实的 `~/.dsh`。
+- 已验证的 DSH 版本在 `package.json` → `dsh.compatibility.dshReleases` 中逐条声明（`0.1.2-rc.1`、`0.1.5-alpha.1`、`0.1.5-alpha.2`、`0.1.5-rc.1`、`0.2.1-rc.5`、`0.2.2-alpha.2` 为 `compatible`；支持范围 `>=0.1.2-rc.1 <0.3.0`）。未列出的版本是未经测试，不代表不兼容。上述声明来自一次性 Profile 实测：装进临时 `$DSH_HOME`，启动 `web` profile（`GET /mcp-manager/api/ping` 返回 200）、启动 `headless` profile 并确认 agent setup 生效（`0.1.5-*` 上还可确认 agent 能看到注册的 `mcp__<服务器>__<工具>`），随后删除该 Profile——全程不碰真实的 `~/.dsh`。自 `0.2.0` 起模型侧工具列表由注册表在提示词瀑布之后装配，因此 broker 改用 `deferLoading` 隐藏直连工具，而不再过滤瀑布载荷。
 - Windows 10/11：stdio 命令经 `cmd.exe` 启动，以便 `.cmd` shim（`npx`、`uvx`）正确解析
 
 ## 安装
@@ -109,7 +109,7 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 - `mcp_describe_tool({ name })`：返回当前会话可见工具的完整描述和精确输入 schema。
 - `mcp_execute_tool({ name, arguments })`：通过 DSH 标准工具流水线执行当前可见 MCP 工具；建议先 describe，但不强制。
 
-模型请求中不再出现原始 `mcp__*` schema，直接调用这些隐藏名称也会被拒绝；只有 `mcp_execute_tool` 拥有的嵌套调用可以通过。三个 broker 都读取调用 agent 的实时工具视图，因此继续遵守 workspace 隔离与 `exclude` 屏蔽。
+模型请求中不再出现原始 `mcp__*` schema，直接调用这些隐藏名称也会被拒绝；只有 `mcp_execute_tool` 拥有的嵌套调用可以通过。DSH `0.2` 及更新版本用注册表的 `deferLoading` 标记实现该屏蔽——harness 在 schema 投影中保留该标记，只在拼装 provider 请求时剔除以它为标记的定义；定义本身仍处于注册且可执行状态，因此 `mcp_execute_tool` 仍能派发。更老的 harness 把工具列表交给提示词瀑布，在那里过滤。三个 broker 都读取调用 agent 的实时工具视图，因此继续遵守 workspace 隔离与 `exclude` 屏蔽。
 
 即使开启此开关，Code/PTC/both agent 也会保留当前会话可见的完整 MCP 目录；
 broker 可以调用，但不会压缩生成式 SDK。DSH `0.2.0-rc.2` 的模式名为
@@ -166,7 +166,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 | MCP 传输（stdio） | `child_process.spawn` 拉起本地命令，JSON-RPC over stdin/stdout（换行分隔），重连时先回收旧进程。Windows 下经 `cmd.exe` 启动以解析 `.cmd` shim |
 | 工具 schema | 服务器 JSON Schema 清洗为注册表支持的 raw 子集（不支持的关键字降级为无约束） |
 | 图片结果 | `output.render` 文本优先；`execute(args, exec)` 暂存投影，`finalizeContent` 仅在路由模型声明图片输入时装上持久化 DSH attachment，其余情况降级为文本占位符 |
-| 按需 broker | Profile 开关注册三个 broker 工具，在提示词组装后过滤原始 `mcp__*` schema，并用执行守卫确保只有 `mcp_execute_tool` 能调用隐藏工具 |
+| 按需 broker | Profile 开关注册三个 broker 工具；DSH 0.2+ 用 `deferLoading` 标记把原始 `mcp__*` 挡出 provider 请求（仍注册、仍可执行），老 harness 在提示词瀑布里过滤；执行守卫确保只有 `mcp_execute_tool` 能调用隐藏工具，PTC 代理按其执行器的提示词 section 放行 |
 | 工具列表变化 | stdio 通知与 Streamable HTTP SSE 通道触发重新读取 `tools/list`；未变化的注册保持挂载 |
 | 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并按 `exclude` 应用 `tools.restrict({ deny })` |
 | 新版本兼容 | 组合出的 agent setup 优先取 setup 回调的第二个参数（DSH 0.1.5-alpha.1 起），仅在缺失时回退到旧的 `agent` 上下文访问器。新版 harness 移除了该访问器，直接读 `ctx.agent` 会抛 `cannot get property "agent" without inject`，导致每次 `agents.resume`/`create` 失败。GUI webserver 改为惰性注入，没有它的 profile 也能继续注册 MCP 工具，而不会留下未激活的条目 |
@@ -220,7 +220,7 @@ DSH 0.2.1-rc.2 Loader、agent、工具注册表和 native 模式 broker，对接
 ## 已知限制
 
 - 只桥接 MCP 的工具能力（resources / prompts 不支持）。
-- 按需过滤支持 `native` 呈现。Code/PTC/both agent 保留当前会话可见的完整 MCP 目录。导出的 SDK renderer 与 assembly 瀑布尚未提供“仅呈现目录过滤”的契约，见[接口证据与降级方案](docs/on-demand-code-mode.md)；完整 SDK 压缩仍由 [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18) 跟进。
+- 按需过滤支持 `native` 呈现。Code/PTC/both agent 保留当前会话可见的完整 MCP 目录；其呈现方式取自执行器的提示词 section（harness 仍提供瀑布载荷时也读该载荷）。导出的 SDK renderer 未提供“仅呈现目录”的契约，见[接口证据与降级方案](docs/on-demand-code-mode.md)；完整 SDK 压缩仍由 [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18) 跟进。
 - OAuth token 明文存于 `~/.dsh` 下的 JSON 文件——请当作机密对待。静态 token 与 `headerEnv` 的值从环境变量读取，不落盘。工作区 OAuth token 也存于同一状态文件，不写进工作区的 `mcp.json`。
 - stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下整条命令行交给 `cmd.exe`，`&`、`|`、`>`、`%VAR%` 等会被 shell 解释——命令与含空格的参数会被自动加引号（已加引号的原样保留），但仍建议使用绝对路径。
 - 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册。手动配置的 Client ID 永远不会被重新注册——其重定向 URI 必须已在提供方白名单里，因此 GUI 换 origin 会表现为提供方侧的重定向错误，而不是自动修复。
