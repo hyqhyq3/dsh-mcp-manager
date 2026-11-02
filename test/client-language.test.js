@@ -313,3 +313,54 @@ it('shows the localized insufficient-scope message and a scoped re-auth button',
   row = renderRow(expanded);
   assert.match(text(row), /Insufficient scope: the token lacks the required scope \(mcp:use\)\./);
 });
+
+it('offers a per-workspace enable switch for global and workspace-local servers', async () => {
+  const calls = [];
+  const globalServer = { id: 'g1', name: 'github', type: 'http', url: 'https://example.test/mcp', authMode: 'oauth', status: 'connected', enabled: true, toolCount: 3 };
+  const localServer = { id: 'w1', name: 'local', type: 'http', url: 'https://local.test/mcp', authMode: 'none', status: 'disabled', disabled: true, toolCount: 0 };
+  const workspaces = [{ path: '/ws', servers: [localServer], exclude: [], disabled: ['github'], error: '' }];
+  const app = mount(async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith('/servers')) return response({ servers: [globalServer] });
+    if (url.endsWith('/workspaces')) return response({ workspaces });
+    if (url.endsWith('/workspaces/server-state')) return response({ workspaces });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+  nodes(tree).find((node) => node.props?.className === 'mm_wsSelect').props.onChange({ target: { value: '/ws' } });
+  tree = app.render();
+
+  const localNode = nodes(tree).find((node) => node.props?.server?.id === 'w1');
+  const globalNode = nodes(tree).find((node) => node.props?.server?.id === 'g1');
+  assert.ok(localNode && globalNode, 'both rows render in the workspace view');
+  const renderRow = (node) => { app.reset(); return app.render(node.type, node.props); };
+  const workspaceSwitch = (rendered, name) => nodes(rendered).find((node) => node.type === 'button'
+    && node.props?.className === 'mm_switch' && node.props['aria-label'] === `Enabled in this workspace: ${name}`);
+
+  // A disabled workspace-local server still renders its row, dimmed with an
+  // explicit explanation, and the switch re-enables it through the new endpoint.
+  let row = renderRow(localNode);
+  assert.match(text(row), /Disabled in this workspace/);
+  const localSwitch = workspaceSwitch(row, 'local');
+  assert.equal(localSwitch.props['data-on'], undefined, 'the switch is off');
+  assert.equal(localSwitch.props['aria-checked'], false);
+  localSwitch.props.onClick();
+  await settle();
+  const localCall = calls.find((call) => call.url.endsWith('/workspaces/server-state'));
+  assert.ok(localCall, 'the switch posts to the workspace server-state endpoint');
+  assert.deepEqual(JSON.parse(localCall.options.body), { path: '/ws', name: 'local', enabled: true });
+
+  // A global server listed in the workspace's disabled list renders as off and
+  // enabling it writes the same endpoint contract.
+  row = renderRow(globalNode);
+  const globalSwitch = workspaceSwitch(row, 'github');
+  assert.equal(globalSwitch.props['data-on'], undefined, 'a disabled global server is off in this workspace');
+  globalSwitch.props.onClick();
+  await settle();
+  const bodies = calls.filter((call) => call.url.endsWith('/workspaces/server-state')).map((call) => JSON.parse(call.options.body));
+  assert.ok(bodies.some((body) => body.name === 'github' && body.enabled === true));
+  await new Promise((resolve) => setImmediate(resolve));
+});
