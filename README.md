@@ -33,7 +33,7 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 - **In-GUI diagnostics**: a failed server shows its reason on the collapsed card (no need to expand it), and the expanded card has a **Logs** panel — an on-demand, redacted trace of every discovery URL and HTTP status, client registration, authorization, token exchange/refresh, `initialize`, `tools/list`, and the stderr tail of a stdio child that exited. Secrets (bearer values, `code`/`state`, `client_secret`, tokens) are stripped when the entry is written, never when it is rendered.
 - **Tool registration** with the same `mcp__<server>__<rawName>` naming convention as the built-in client, including strict-schema sanitization for the DSH tool registry and `isConcurrencySafe` marking.
 - **Workspace isolation**: declare per-project servers in `<workspace>/.dsh/dshmm/mcp.json` — their tools register only into that workspace's sessions, and you can mask specific global servers per workspace.
-- **Opt-in on-demand broker**: keep the model-facing MCP surface fixed at `mcp_search_tools`, `mcp_describe_tool`, and `mcp_execute_tool` instead of sending every `mcp__*` schema on every Native-mode request. It is disabled by default. `mcp_search_tools` is a zero-dependency lexical ranker (BM25 + CJK/alias/fuzzy, plus a catalog-listing fallback). Direct tools are hidden with the registry's `deferLoading` marker on DSH 0.2 and newer; older harnesses get the equivalent filter in the system-prompt waterfall.
+- **Opt-in on-demand broker**: keep the model-facing MCP surface fixed at `mcp_search_tools`, `mcp_describe_tool`, and `mcp_execute_tool` instead of sending every `mcp__*` schema on every Native-mode request. It is disabled by default. `mcp_search_tools` is a zero-dependency lexical ranker (BM25 + CJK/alias/fuzzy, plus a catalog-listing fallback). Direct tools are hidden with the registry's `deferLoading` marker on DSH 0.2.2 and newer; `0.2.1` and older get the equivalent filter in the system-prompt waterfall.
 - **Stable tool refresh**: `notifications/tools/list_changed` refreshes only added, removed, or schema-changed registrations for both stdio and Streamable HTTP servers.
 
 The MCP UI follows DSH's language preference in **Settings → General → Language** through the `mcp` locale namespace. DSH owns browser fallback, preference persistence, and live language updates; the plugin has no separate language selector or language API. Labels, forms, status badges, and confirmations are translated; server-supplied diagnostics remain in their original language. Legacy `language` values in `~/.dsh/mcp-manager.json` are ignored and left untouched.
@@ -44,7 +44,7 @@ Version 0.11.0 requires `@deepseek-ai/dsh-client-locale` and the slot system's l
 
 - DeepSeek Harness, web profile for the Settings → MCP page (`npx @deepseek-ai/dsh web`). On a profile without a GUI webserver (headless/tui) the plugin still registers MCP tools and connects servers — only the settings page is missing.
 - Node.js `^22.19` or `>=24`; pnpm on your `PATH`
-- Verified DSH releases are declared one by one in `package.json` → `dsh.compatibility.dshReleases` (`0.1.2-rc.1`, `0.1.5-alpha.1`, `0.1.5-alpha.2`, `0.1.5-rc.1`, `0.2.1-rc.5`, `0.2.2-alpha.2` are `compatible`; supported range `>=0.1.2-rc.1 <0.3.0`). Releases that are not listed are untested, not declared broken. These declarations are backed by disposable-profile runs: install into a scratch `$DSH_HOME`, boot the `web` profile (`GET /mcp-manager/api/ping` → 200), boot the `headless` profile and confirm the agent setup applies (on `0.1.5-*` a registered `mcp__<server>__<tool>` is also visible to the agent), then delete the profile — never against a real `~/.dsh`. From `0.2.0` the model-facing tool list is assembled from the registry after the system-prompt waterfall, so the broker hides direct tools with `deferLoading` instead of filtering the waterfall payload.
+- Verified DSH releases are declared one by one in `package.json` → `dsh.compatibility.dshReleases` (`0.1.2-rc.1`, `0.1.5-alpha.1`, `0.1.5-alpha.2`, `0.1.5-rc.1`, `0.2.1-rc.5`, `0.2.2-alpha.2` are `compatible`; supported range `>=0.1.2-rc.1 <0.3.0`). Releases that are not listed are untested, not declared broken. These declarations are backed by disposable-profile runs: install into a scratch `$DSH_HOME`, boot the `web` profile (`GET /mcp-manager/api/ping` → 200), boot the `headless` profile and confirm the agent setup applies (on `0.1.5-*` a registered `mcp__<server>__<tool>` is also visible to the agent), then delete the profile — never against a real `~/.dsh`. From `0.2.2` the model-facing tool list is assembled from the registry after the system-prompt waterfall, so the broker hides direct tools with `deferLoading`; `0.2.1-rc.5` still passes the list through the waterfall and is filtered there. The `0.2.*` entries additionally pass `node scripts/verify-deferral-dsh.mjs <prefix>` (real web profile + mock MCP server, no model request); the `headless` boot was not repeated for them.
 - Windows 10/11: stdio commands are launched via `cmd.exe` so `.cmd` shims (`npx`, `uvx`) resolve correctly
 
 ## Install
@@ -120,11 +120,13 @@ With on-demand mode on, a Native-mode agent sees only these three MCP broker too
 - `mcp_describe_tool({ name })` returns the exact registered description and input schema for one tool visible in that session.
 - `mcp_execute_tool({ name, arguments })` executes any currently visible MCP tool through the normal DSH tool pipeline. Calling `describe` first is recommended but not required.
 
-Raw `mcp__*` names are kept out of the model request and direct calls to them are denied; only the nested dispatch owned by `mcp_execute_tool` is allowed. On DSH `0.2` and newer the exclusion is the registry's `deferLoading` marker, which the harness preserves through schema projection and inverts only for provider requests — the definitions stay registered and executable, so `mcp_execute_tool` still dispatches them. Older harnesses pass the tool list through the system-prompt waterfall and are filtered there. Search, describe, and execute all resolve the calling agent's live registry view, so workspace isolation and `exclude` masks remain effective.
+Raw `mcp__*` names are kept out of the model request and direct calls to them are denied; only the nested dispatch owned by `mcp_execute_tool` is allowed. On DSH `0.2.2` and newer the exclusion is the registry's `deferLoading` marker: the harness preserves it through schema projection and the provider adapter decides whether the request omits the tool (the DeepSeek adapter forwards `defer_loading`, the pi-ai adapter filters it out, and routes without tool-update support send the schema unchanged). The definitions stay registered and executable, so `mcp_execute_tool` still dispatches them. `0.2.1-rc.5` and older pass the tool list through the system-prompt waterfall and are filtered there. Search, describe, and execute all resolve the calling agent's live registry view, so workspace isolation and `exclude` masks remain effective.
 
 Code/PTC/both agents retain their full session-visible MCP catalog, even with
-this switch on. The broker remains callable but does not shrink the generated
-SDK. DSH `0.2.0-rc.2` names its modes `native/ptc/both`; `0.2.1-rc.2` supports
+this switch on. On `0.2.2` the broker is not callable from inside a `run_code`
+program (the PTC executor only makes `run_code` directly callable), so those
+programs call the `mcp__*` tools directly; on `0.2.1-rc.5` the broker stays
+callable. Either way the generated SDK is not shrunk. DSH `0.2.0-rc.2` names its modes `native/ptc/both`; `0.2.1-rc.2` supports
 `native/ptc`. See [issue #18 investigation and isolated verification](docs/on-demand-code-mode.md)
 for the checked interfaces, safe fallbacks, context-cost measurements and test
 commands. The local 0.13.3 candidate also keeps this conservative fallback when a custom
@@ -179,7 +181,7 @@ attempts cannot restore tools or clear a newer connection.
 | MCP transport (stdio) | `child_process.spawn` a local command, JSON-RPC over stdin/stdout (newline-delimited); reconnect reaps the old process first. On Windows it spawns through `cmd.exe` so `.cmd` shims resolve |
 | Tool schema | Server JSON Schemas are sanitized to the registry's supported raw subset (unsupported vocabulary degrades to unconstrained) |
 | Image results | `output.render` is text-first; `execute(args, exec)` stages a projection and `finalizeContent` installs durable DSH attachments only when the routed model declares image input — every other case degrades to a text placeholder |
-| On-demand broker | A profile setting installs three broker tools, filters raw `mcp__*` schemas after prompt assembly, and guards execution so only `mcp_execute_tool` may dispatch a hidden MCP tool |
+| On-demand broker | A profile setting installs three broker tools; on DSH `0.2.2+` raw `mcp__*` definitions stay registered with `deferLoading` (the provider adapter hides them), older harnesses filter the system-prompt waterfall; an execution guard admits only `mcp_execute_tool` (and PTC programs, whose executor owns prompt sections) |
 | Tool list changes | stdio notifications and the Streamable HTTP SSE channel refresh the live `tools/list`; unchanged registrations remain mounted |
 | Workspace isolation | `agents.create`/`resume` are decorated to compose a per-agent setup that registers `<workspace>/.dsh/dshmm/mcp.json` tools into the agent scope and applies `tools.restrict({ deny })` for `exclude` |
 | Harness compatibility | The composed agent setup takes the Agent from the setup callback's explicit second argument (DSH 0.1.5-alpha.1 and later) and only falls back to the legacy `agent` context accessor. Newer harness builds removed that accessor, so reading `ctx.agent` there throws `cannot get property "agent" without inject` and fails every `agents.resume`/`create`. The GUI webserver is injected lazily, so a profile without one keeps its MCP tools instead of leaving a pending entry |
@@ -190,7 +192,7 @@ attempts cannot restore tools or clear a newer connection.
 Releases are immutable and tagged, so consumers can pin one:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.15.0
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.15.1
 ```
 
 The DSH STORE catalog additionally pins a full 40-character commit instead of a floating branch (release 0.12.0 = `b029407ca3d258e83abac6c06ff94f92e5687164`; the store re-pins the newest release after each push).
@@ -222,6 +224,19 @@ the global and workspace row shapes in both locales. A real
 TryPost/Laravel-Passport browser consent round trip and Windows remain
 unverified; see [v0.15.0 verification](docs/release-v0.15.0.md). This does not
 expand the compatibility matrix.
+
+For v0.15.1, `test/on-demand-deferral.test.js` reproduces the DSH 0.2.2
+breakage (the waterfall no longer carries `tools`) and covers the `deferLoading`
+marking, the toggle re-registration, the per-agent dispatch admission and both
+`ctx.tools.execute()` shapes. `node scripts/verify-deferral-dsh.mjs <prefix>`
+boots the real web profile with a mock MCP server and no model request on
+`0.2.2-alpha.2` (registry assembly, marked deferred) and on `0.2.1-rc.5`
+(waterfall filter); both pass and record which contract they observed. What a
+provider actually does with a deferred tool is provider-side and unverified
+here (no model request): the DeepSeek adapter forwards `defer_loading`, the
+pi-ai adapter filters. Windows and pre-0.2 harnesses were not re-run. See
+[v0.15.1 verification](docs/release-v0.15.1.md). This does not expand the
+compatibility matrix beyond the two tested entries.
 
 Next gate: a real-profile readback (resolved version, running process, visible Settings → MCP page) plus, for distribution, an unauthenticated readback of the tagged artifacts. Until those are recorded, read the compatibility declarations as disposable-profile verification only — not as proof of a live installation. The same applies to listing status on DSH STORE.
 
