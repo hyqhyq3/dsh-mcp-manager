@@ -5,6 +5,18 @@ the complete **session-visible** MCP catalog. This change does not implement SDK
 catalog compression. It fixes the conservative fallback when a custom prompt
 empties the SDK section but still advertises `run_code`.
 
+> **Update (v0.15.1, 2026-11-02).** DSH `0.2.2` moved the model-facing tool
+> list out of the `system-prompt/assemble` payload and appends the registry-owned
+> list afterwards. The production broker now hides direct `mcp__*` tools with the
+> registry's `deferLoading` marker on `0.2.2+` (the provider adapter decides
+> whether the request omits them: the deepseek adapter forwards `defer_loading`,
+> the pi-ai adapter filters, and routes without tool-update support send the
+> schema unchanged) and keeps the waterfall filter for `0.2.1` and older. The
+> SDK/`tools:sdk` conclusions below are unchanged — the catalog is still not
+> compressed for Code/PTC/both presentations. On `0.2.2` a `run_code` program
+> cannot call `mcp_execute_tool`; it calls `mcp__*` tools directly. Evidence:
+> `docs/release-v0.15.1.md`.
+
 ## Checked interfaces
 
 Checked on 2026-10-23 against the published `@deepseek-ai/dsh-tools` and DSH
