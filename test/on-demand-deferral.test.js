@@ -19,7 +19,7 @@ after(() => rmSync(scratch, { recursive: true, force: true }));
  * hooks. `selectExecutor` reports a code/PTC presentation only for `codeAgent`,
  * mirroring the executor interface the real harness exposes.
  */
-function mount(t, initialState, seed = []) {
+function mount(t, initialState, seed = [], executeShape = 'batch') {
   writeFileSync(statePath, JSON.stringify(initialState));
   const tools = new Map(seed.map(definition => [definition.name, definition]));
   const dispatched = [];
@@ -42,10 +42,11 @@ function mount(t, initialState, seed = []) {
       ...deferLoading === true ? { deferLoading } : {},
     })),
     selectExecutor: agent => (agent === codeAgent ? { sections: [{ name: 'tools:sdk' }] } : { describe: () => ({ schemas: [] }) }),
-    // DSH 0.2 answers one settled batch; the flat fields are the older contract.
+    // DSH 0.2.2 answers one settled batch; the flat fields are the older contract.
     execute: async input => {
       dispatched.push(input);
-      return { results: [{ callId: input.calls[0].id, result: { content: [{ type: 'text', text: 'batch-ok' }], isError: false } }] };
+      const value = { content: [{ type: 'text', text: executeShape === 'batch' ? 'batch-ok' : 'flat-ok' }], isError: false };
+      return executeShape === 'batch' ? { results: [{ callId: input.calls[0].id, result: value }] } : value;
     },
   };
   const agents = { create: () => {}, resume: () => {} };
@@ -74,7 +75,7 @@ function mount(t, initialState, seed = []) {
     return { status, ...value };
   };
 
-  return { tools, guards, hooks, codeAgent, dispatched, request };
+  return { tools, guards, hooks, codeAgent, dispatched, registry, request };
 }
 
 it('keeps the assemble waterfall tolerant of the DSH 0.2 payload', async t => {
@@ -141,4 +142,50 @@ it('dispatches a nested call through either registry shape', async t => {
   assert.equal(input.name, 'mcp__fixture__echo');
   assert.deepEqual(input.arguments, { text: 'hi' });
   assert.equal(input.parent, exec.token);
+});
+
+it('unwraps the flat single-call result on pre-0.2.2 harnesses', async t => {
+  const echo = {
+    name: 'mcp__fixture__echo',
+    description: 'Echo [fixture MCP]',
+    parameters: { type: 'object', properties: { text: { type: 'string' } } },
+    output: { schema: { type: 'object' }, render: () => [] },
+    execute: async () => ({ text: 'echo', content: [], isError: false }),
+  };
+  const { tools } = mount(t, { servers: [], onDemandToolInjection: true }, [echo], 'flat');
+  const definition = tools.get('mcp_execute_tool');
+  const exec = { agent: { id: 'native' }, token: Symbol('broker'), callId: 'outer', rootCallId: 'root', signal: new AbortController().signal };
+  const value = await definition.execute({ name: 'mcp__fixture__echo', arguments: { text: 'hi' } }, exec);
+  assert.deepEqual(value.content, [{ type: 'text', text: 'flat-ok' }]);
+});
+
+it('admits the in-flight nested dispatch and denies direct calls again afterwards', async t => {
+  const echo = {
+    name: 'mcp__fixture__echo',
+    description: 'Echo [fixture MCP]',
+    parameters: { type: 'object', properties: { text: { type: 'string' } } },
+    output: { schema: { type: 'object' }, render: () => [] },
+    execute: async () => ({ text: 'echo', content: [], isError: false }),
+  };
+  const { tools, guards, registry } = mount(t, { servers: [], onDemandToolInjection: true }, [echo]);
+  const guard = guards[0];
+  const agent = { id: 'native' };
+  assert.match(guard({ name: 'mcp__fixture__echo', agent }), /hidden while on-demand MCP tools are enabled/);
+
+  // DSH 0.2.2 nested calls carry no parent token, so the guard admits them for
+  // the duration of the broker dispatch only.
+  const dispatch = registry.execute;
+  registry.execute = async input => {
+    assert.equal(guard({ name: 'mcp__fixture__echo', agent }), undefined, 'the awaiting dispatch admits its nested call');
+    return dispatch(input);
+  };
+  const definition = tools.get('mcp_execute_tool');
+  const exec = { agent, token: Symbol('broker'), callId: 'outer', rootCallId: 'root', signal: new AbortController().signal };
+  await definition.execute({ name: 'mcp__fixture__echo', arguments: { text: 'hi' } }, exec);
+  assert.match(guard({ name: 'mcp__fixture__echo', agent }), /hidden while on-demand MCP tools are enabled/, 'the window closes when the dispatch settles');
+
+  // A rejected dispatch must still close the window.
+  registry.execute = async () => { throw new Error('registry exploded'); };
+  await assert.rejects(definition.execute({ name: 'mcp__fixture__echo', arguments: { text: 'hi' } }, exec), /registry exploded/);
+  assert.match(guard({ name: 'mcp__fixture__echo', agent }), /hidden while on-demand MCP tools are enabled/);
 });
