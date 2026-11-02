@@ -25,7 +25,7 @@
 - **就地编辑**：重命名、stdio ↔ HTTP 切换、改认证方式/标头，无需删除重建。
 - **界面内诊断**：失败的服务器在**折叠状态**就显示失败原因（无需展开），展开后还有 **日志 / Logs** 面板——按需加载、已脱敏的轨迹，覆盖每一次发现 URL 与 HTTP 状态、客户端注册、授权跳转、token 交换/刷新、`initialize`、`tools/list`，以及 stdio 子进程退出时的 stderr 尾部。脱敏在**写入时**完成（Bearer 值、`code`/`state`、`client_secret`、token 一律剥掉），而不是渲染时。
 - **工具注册**：与内置客户端相同的 `mcp__<server>__<rawName>` 命名约定，含 DSH 工具注册表的严格 schema 清洗，并标记 `isConcurrencySafe`。
-- **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话，还可按工作区屏蔽指定的全局服务器。
+- **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话；每条服务器（全局或工作区本地）都有独立的「在此工作区启用」开关，且不影响其他工作区。
 - **可选按需 broker**：模型侧固定只暴露 `mcp_search_tools`、`mcp_describe_tool`、`mcp_execute_tool`，不再每轮发送所有 `mcp__*` schema。默认关闭，必须手动开启。 `mcp_search_tools` 是零依赖词法排序器（BM25 + CJK/别名/模糊，且支持列目录兜底）。DSH 0.2.2 及更新版本用注册表的 `deferLoading` 标记隐藏直连工具，`0.2.1` 及更老的 harness 则在提示词瀑布里过滤。
 - **稳定刷新工具列表**：stdio 与 Streamable HTTP 收到 `notifications/tools/list_changed` 后，只更新新增、删除或 schema 变化的注册，未变化工具保持挂载。
 
@@ -62,7 +62,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-mana
 5. 无鉴权服务器：选择 **无鉴权（服务器无需认证）**——插件不发送 `Authorization` 头，保存后直接连接；适用于不做认证的端点（例如本机 `http://127.0.0.1:9316/mcp`）。
 6. 可选：打开页面顶部的**按需 MCP 工具调用**。该开关对整个 profile 生效，重启后保持，并在现有会话的下一次请求开始生效。
 
-状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。按钮：去认证、编辑、启用/禁用（开关）、删除。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要，展开后可用 **日志 / Logs**。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
+状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。按钮：去认证、编辑、启用/禁用（开关）、删除。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要，展开后可用 **日志 / Logs**。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话；若只想对某个工作区关闭，请用工作区视图里每行的「在此工作区启用」开关。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
 
 ### 工具调用超时
 
@@ -122,7 +122,7 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 
 ### 工作区隔离
 
-全局服务器（在 **设置 → MCP** 添加）对所有工作区可见。用设置页顶部的**工作区下拉框**在「全局」与某个工作区之间切换；选中工作区后，会同时显示该工作区自己的服务器与全局服务器（每条全局服务器带一个**隐藏**开关）。工作区服务器存放在 `<workspace>/.dsh/dshmm/mcp.json`（Claude/Codex 风格）：
+全局服务器（在 **设置 → MCP** 添加）对所有工作区可见。用设置页顶部的**工作区下拉框**在「全局」与某个工作区之间切换；选中工作区后，会同时显示该工作区自己的服务器与全局服务器，每条都带一个「在此工作区启用」开关。工作区服务器存放在 `<workspace>/.dsh/dshmm/mcp.json`（Claude/Codex 风格）：
 
 ```json
 {
@@ -131,14 +131,15 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
     "unity-mcp": { "type": "http", "url": "http://localhost:8090/", "authMode": "static", "tokenEnv": "UNITY_MCP_TOKEN" },
     "local-mcp": { "type": "http", "url": "http://127.0.0.1:9316/mcp", "authMode": "none" }
   },
-  "exclude": ["github"]
+  "disabled": ["github"]
 }
 ```
 
 - 已在 DSH 注册的工作区服务器可以**在 UI 里增删改**（选中工作区后点 **＋** 会写回该工作区的 `mcp.json`）。也可以直接手改文件——创建或修改文件都会被热重载；JSON 无效时界面会显示错误，并继续使用上一次有效的运行配置。
 - `type` 缺省为 `http`；stdio 服务器的 `cwd` 缺省为工作区根。`headers` / `headerEnv` / `env` / `args` 与设置页表单的格式一致。
 - 工作区服务器的工具**只**注册进「工作目录解析到该工作区」的会话；其他工作区的 agent 看不到它们。全局服务器除非被屏蔽，否则处处可见。
-- `exclude` 列出要在此工作区隐藏的全局服务器（通过工具注册表的按 agent 限制屏蔽其工具）。在工作区视图里点每条全局服务器上的**隐藏**复选框即可切换。
+- `disabled` 是按工作区的关闭开关，同时覆盖**全局**与**工作区本地**名称：被禁用的服务器在此工作区不注册工具、也不建立连接，其他工作区与全局状态不受影响。在工作区视图里用任意一行的开关切换；被禁用的行仍然可见（置灰并显示「已在此工作区禁用」），重新启用只需一次点击。禁用会保留声明与 OAuth token，重新启用无需重新认证。手改文件会热重载；未知名称只记录日志并忽略，不会让整个文件失效。改名或删除工作区服务器时会同步维护该列表——新名称继承原开关状态，删除的名称会被移除，重新添加同一名称时默认启用（若该名称同时属于某台全局服务器，则保留该条目，因为它可能是在屏蔽那台全局服务器）。
+- `exclude`（旧字段）仍然通过同一套按 agent 限制屏蔽全局服务器；UI 下次切换时会把名称归并到 `disabled`，两个列表中的任一命中都会屏蔽。开关由 `POST /mcp-manager/api/workspaces/server-state { path, name, enabled }` 支撑，写入时保留文件中的未知字段。
 - `serverName` 在「全局 + 所有工作区来源」之间必须唯一；重复的名称会被标记为冲突并跳过（UI 里可见）。当占用该名称的全局服务器被删除或改名后，冲突状态会重新判定，工作区条目自行连上，不必再等一次 `mcp.json` 改动。
 - 配置在每个新会话时重读，并通过文件监听热更新。
 - 工作区连接失败后按 3s、6s、12s 递增重试，上限 60s，成功后重置。SSE 会话断流会立即重连，并为已有 agent 更新工具；缺少凭据的服务器保持 `needs-auth`。编辑/删除服务器、关闭最后一个工作区会话或卸载插件时会取消待执行的重试。
@@ -170,7 +171,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 | 图片结果 | `output.render` 文本优先；`execute(args, exec)` 暂存投影，`finalizeContent` 仅在路由模型声明图片输入时装上持久化 DSH attachment，其余情况降级为文本占位符 |
 | 按需 broker | Profile 开关注册三个 broker 工具；DSH `0.2.2+` 上原始 `mcp__*` 定义保留 `deferLoading` 标记（由 provider 适配器隐藏），老 harness 在提示词瀑布里过滤；执行守卫只放行 `mcp_execute_tool`（以及执行器拥有提示词 section 的 PTC 程序） |
 | 工具列表变化 | stdio 通知与 Streamable HTTP SSE 通道触发重新读取 `tools/list`；未变化的注册保持挂载 |
-| 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并按 `exclude` 应用 `tools.restrict({ deny })` |
+| 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并对 `exclude`/`disabled` 中的全局名称应用 `tools.restrict({ deny })`；`disabled` 的工作区本地服务器保持声明，但不连接、不注册 |
 | 新版本兼容 | 组合出的 agent setup 优先取 setup 回调的第二个参数（DSH 0.1.5-alpha.1 起），仅在缺失时回退到旧的 `agent` 上下文访问器。新版 harness 移除了该访问器，直接读 `ctx.agent` 会抛 `cannot get property "agent" without inject`，导致每次 `agents.resume`/`create` 失败。GUI webserver 改为惰性注入，没有它的 profile 也能继续注册 MCP 工具，而不会留下未激活的条目 |
 | 交互通道 | 设置页与 host 半之间走同源 JSON API（`/mcp-manager/api/*`） |
 
@@ -179,7 +180,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 发行版不可变且带 tag，消费者可以固定到某个版本：
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.15.1
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.16.0
 ```
 
 DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.12.0 发行 = `b029407ca3d258e83abac6c06ff94f92e5687164`；每次推送后由商城重新固定最新发行版）。
@@ -218,6 +219,14 @@ v0.15.1 的 `test/on-demand-deferral.test.js` 复现 DSH 0.2.2 的破坏（提�
 请求）：DeepSeek 适配器转发 `defer_loading`，pi-ai 适配器过滤。Windows 与 0.2 之前
 的 harness 未复测。证据与边界见 [v0.15.1 验证记录](docs/release-v0.15.1.md)。
 本次只在兼容性声明中新增已实测的两个条目。
+
+v0.16.0 的 `test/workspace-disable.test.js` 通过真实 `apply()` API 端到端覆盖按工作区的
+`disabled` 列表：只在某一个工作区屏蔽全局服务器（`exclude` 行为不变）、被禁用的工作区本地
+服务器保持声明但从不连接/注册、`/workspaces/server-state` 开关对该工作区的已有 agent 与
+新建 agent 同时生效、手改文件热重载、未知名称被忽略、写入保留未知字段。
+`test/client-language.test.js` 渲染两种行形态的开关并断言接口契约，双语字典一致性测试覆盖
+新增字符串。真实浏览器点选与 Windows 仍未验证；证据与边界见
+[v0.16.0 验证记录](docs/release-v0.16.0.md)。本次不扩展 DSH 兼容性声明矩阵。
 
 下一个门禁：真实 Profile 的回读（解析出的版本、运行进程、设置 → MCP 页面可见），以及在分发场景下对已打 tag 产物的免登录回读。在这些证据补齐之前，兼容性声明只代表一次性 Profile 的验证结果，**不代表**你的实际安装已被验证；DSH STORE 的上架状态同理。
 

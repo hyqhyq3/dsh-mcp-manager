@@ -32,7 +32,7 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 - **Edit-in-place**: rename a server, switch stdio ↔ HTTP, or change auth/headers without deleting and re-adding it.
 - **In-GUI diagnostics**: a failed server shows its reason on the collapsed card (no need to expand it), and the expanded card has a **Logs** panel — an on-demand, redacted trace of every discovery URL and HTTP status, client registration, authorization, token exchange/refresh, `initialize`, `tools/list`, and the stderr tail of a stdio child that exited. Secrets (bearer values, `code`/`state`, `client_secret`, tokens) are stripped when the entry is written, never when it is rendered.
 - **Tool registration** with the same `mcp__<server>__<rawName>` naming convention as the built-in client, including strict-schema sanitization for the DSH tool registry and `isConcurrencySafe` marking.
-- **Workspace isolation**: declare per-project servers in `<workspace>/.dsh/dshmm/mcp.json` — their tools register only into that workspace's sessions, and you can mask specific global servers per workspace.
+- **Workspace isolation**: declare per-project servers in `<workspace>/.dsh/dshmm/mcp.json` — their tools register only into that workspace's sessions, and every row (global or workspace-local) has a per-workspace **enable** switch that never affects other workspaces.
 - **Opt-in on-demand broker**: keep the model-facing MCP surface fixed at `mcp_search_tools`, `mcp_describe_tool`, and `mcp_execute_tool` instead of sending every `mcp__*` schema on every Native-mode request. It is disabled by default. `mcp_search_tools` is a zero-dependency lexical ranker (BM25 + CJK/alias/fuzzy, plus a catalog-listing fallback). Direct tools are hidden with the registry's `deferLoading` marker on DSH 0.2.2 and newer; `0.2.1` and older get the equivalent filter in the system-prompt waterfall.
 - **Stable tool refresh**: `notifications/tools/list_changed` refreshes only added, removed, or schema-changed registrations for both stdio and Streamable HTTP servers.
 
@@ -69,7 +69,7 @@ Then restart `dsh --profile web` and refresh the page. The package declares a `d
 5. No-auth servers: pick **No auth (server needs no credentials)** — the plugin sends no `Authorization` header and connects on save. Use it for an endpoint that authenticates nothing (for example a local `http://127.0.0.1:9316/mcp`).
 6. Optional: turn on **On-demand MCP tool calls** at the top of the page. The setting is profile-wide, persists across restarts, and affects existing sessions on their next request.
 
-Status badges: `connected (N tools)` / `needs-auth` / `authorizing` / `error` / `disabled`. Buttons: authenticate, edit, enable/disable (switch), delete. A non-empty error is also shown as a one-line summary under the server name while the card is collapsed, and the expanded card offers **日志 / Logs**. **Disable** unregisters that server's tools and drops its connection (config and OAuth tokens persist); **Enable** reconnects without re-authenticating. Disabled servers stay dormant across restarts. The toggle is global: it affects every session in this profile. State persists at `~/.dsh/mcp-manager.json` (server configs + OAuth client registrations + tokens; static tokens are referenced by env-var name, not stored).
+Status badges: `connected (N tools)` / `needs-auth` / `authorizing` / `error` / `disabled`. Buttons: authenticate, edit, enable/disable (switch), delete. A non-empty error is also shown as a one-line summary under the server name while the card is collapsed, and the expanded card offers **日志 / Logs**. **Disable** unregisters that server's tools and drops its connection (config and OAuth tokens persist); **Enable** reconnects without re-authenticating. Disabled servers stay dormant across restarts. The toggle is global: it affects every session in this profile; the workspace view's per-row switch turns a server off for one workspace only. State persists at `~/.dsh/mcp-manager.json` (server configs + OAuth client registrations + tokens; static tokens are referenced by env-var name, not stored).
 
 ### Tool-call timeouts
 
@@ -134,7 +134,7 @@ prompt empties `tools:sdk` but still exposes `run_code`.
 
 ### Workspace isolation
 
-Global servers (added in **Settings → MCP**) are visible in every workspace. Use the **workspace dropdown** at the top of the Settings → MCP page to switch between "global" and a specific workspace; when a workspace is selected you see both its own servers and the global servers (with a **隐藏 / Hide** toggle to mask each global server). Workspace servers live in `<workspace>/.dsh/dshmm/mcp.json` (Claude/Codex-style):
+Global servers (added in **Settings → MCP**) are visible in every workspace. Use the **workspace dropdown** at the top of the Settings → MCP page to switch between "global" and a specific workspace; when a workspace is selected you see both its own servers and the global servers, each with a per-workspace **Enabled in this workspace** switch. Workspace servers live in `<workspace>/.dsh/dshmm/mcp.json` (Claude/Codex-style):
 
 ```json
 {
@@ -143,14 +143,15 @@ Global servers (added in **Settings → MCP**) are visible in every workspace. U
     "unity-mcp": { "type": "http", "url": "http://localhost:8090/", "authMode": "static", "tokenEnv": "UNITY_MCP_TOKEN" },
     "local-mcp": { "type": "http", "url": "http://127.0.0.1:9316/mcp", "authMode": "none" }
   },
-  "exclude": ["github"]
+  "disabled": ["github"]
 }
 ```
 
 - Workspace servers can be **added / edited / deleted in the UI** for workspaces registered in DSH (the **＋** button while a workspace is selected writes to that workspace's `mcp.json`). Hand-editing the file also works — creating or changing it is hot-reloaded. Invalid JSON is shown as an error while the last valid live configuration stays active.
 - `type` defaults to `http`; a stdio server's `cwd` defaults to the workspace root. `headers` / `headerEnv` / `env` / `args` follow the same shapes as the Settings form.
 - A workspace server's tools register **only** into sessions whose working directory resolves to that workspace; another workspace's agents never see them. Global servers stay visible everywhere unless masked.
-- `exclude` lists global servers to hide in this workspace (their tools are masked through the tool registry's per-agent restriction). Toggle it via the **隐藏 / Hide** checkbox on each global server in the workspace view.
+- `disabled` is the per-workspace off switch and covers **both** global and workspace-local names. A disabled server registers no tools and never connects in this workspace; other workspaces and the profile-wide state are untouched. Toggle it with the switch on any row in the workspace view — a disabled row stays visible (dimmed, `disabled in this workspace`) so re-enabling is one click. Disabling keeps the declaration and any OAuth token, so re-enabling needs no re-authentication. Hand-editing the list is hot-reloaded; unknown names are ignored (and logged) rather than failing the file. Renaming or deleting a workspace server keeps the list in sync — the new name inherits the off state, and a deleted name is removed so re-adding it starts enabled (a name shared with a global server keeps its entry, because it may be that server's mask).
+- `exclude` (legacy) still masks global servers in this workspace through the same per-agent restriction; the UI folds a name into `disabled` on the next toggle and either list masks it. `POST /mcp-manager/api/workspaces/server-state { path, name, enabled }` backs the switch and preserves unknown keys in the file.
 - `serverName` must be unique across global + all workspace sources; a later duplicate is flagged as a conflict and skipped (shown in the UI). A conflict is re-derived when the blocking global server is deleted or renamed, so the workspace entry connects on its own instead of waiting for a `mcp.json` edit.
 - Config is re-read on each new session and hot-reloaded via a file watcher.
 - Workspace connection failures retry automatically after 3s, 6s, 12s, up to 60s; a successful connection resets the delay. SSE session loss reconnects immediately and refreshes tools for existing agents. Credential-gated servers remain `needs-auth`. Editing/deleting a server, closing its last session, or unloading the plugin cancels pending retries.
@@ -183,7 +184,7 @@ attempts cannot restore tools or clear a newer connection.
 | Image results | `output.render` is text-first; `execute(args, exec)` stages a projection and `finalizeContent` installs durable DSH attachments only when the routed model declares image input — every other case degrades to a text placeholder |
 | On-demand broker | A profile setting installs three broker tools; on DSH `0.2.2+` raw `mcp__*` definitions stay registered with `deferLoading` (the provider adapter hides them), older harnesses filter the system-prompt waterfall; an execution guard admits only `mcp_execute_tool` (and PTC programs, whose executor owns prompt sections) |
 | Tool list changes | stdio notifications and the Streamable HTTP SSE channel refresh the live `tools/list`; unchanged registrations remain mounted |
-| Workspace isolation | `agents.create`/`resume` are decorated to compose a per-agent setup that registers `<workspace>/.dsh/dshmm/mcp.json` tools into the agent scope and applies `tools.restrict({ deny })` for `exclude` |
+| Workspace isolation | `agents.create`/`resume` are decorated to compose a per-agent setup that registers `<workspace>/.dsh/dshmm/mcp.json` tools into the agent scope and applies `tools.restrict({ deny })` for `exclude`/`disabled` global names; a `disabled` workspace-local server stays declared but is neither connected nor registered |
 | Harness compatibility | The composed agent setup takes the Agent from the setup callback's explicit second argument (DSH 0.1.5-alpha.1 and later) and only falls back to the legacy `agent` context accessor. Newer harness builds removed that accessor, so reading `ctx.agent` there throws `cannot get property "agent" without inject` and fails every `agents.resume`/`create`. The GUI webserver is injected lazily, so a profile without one keeps its MCP tools instead of leaving a pending entry |
 | Hot path | Same-origin JSON API under `/mcp-manager/api/*` between the settings page and the host half |
 
@@ -192,7 +193,7 @@ attempts cannot restore tools or clear a newer connection.
 Releases are immutable and tagged, so consumers can pin one:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.15.1
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.16.0
 ```
 
 The DSH STORE catalog additionally pins a full 40-character commit instead of a floating branch (release 0.12.0 = `b029407ca3d258e83abac6c06ff94f92e5687164`; the store re-pins the newest release after each push).
@@ -237,6 +238,18 @@ here (no model request): the DeepSeek adapter forwards `defer_loading`, the
 pi-ai adapter filters. Windows and pre-0.2 harnesses were not re-run. See
 [v0.15.1 verification](docs/release-v0.15.1.md). This does not expand the
 compatibility matrix beyond the two tested entries.
+
+For v0.16.0, `test/workspace-disable.test.js` covers the per-workspace
+`disabled` list end to end over the real `apply()` API: masking a global server
+in one workspace only (with `exclude` unchanged), a disabled workspace-local
+server that stays declared but never connects or registers, the
+`/workspaces/server-state` toggle applying to existing **and** new agents of that
+workspace, hot reload after a file edit, an unknown name being ignored, and
+unknown keys surviving the write. `test/client-language.test.js` renders the
+switch for both row shapes and asserts the endpoint contract; the bilingual
+dictionary parity test covers the new strings. A live browser click-through and
+Windows remain unverified; see [v0.16.0 verification](docs/release-v0.16.0.md).
+This does not expand the DSH compatibility matrix.
 
 Next gate: a real-profile readback (resolved version, running process, visible Settings → MCP page) plus, for distribution, an unauthenticated readback of the tagged artifacts. Until those are recorded, read the compatibility declarations as disposable-profile verification only — not as proof of a live installation. The same applies to listing status on DSH STORE.
 
