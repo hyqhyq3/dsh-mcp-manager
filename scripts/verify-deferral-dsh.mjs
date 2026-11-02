@@ -12,7 +12,7 @@ assert.ok(process.argv[2], 'Supply an npm prefix containing @deepseek-ai/dsh');
 const runtime = resolve(process.argv[2]);
 const pkgPath = join(runtime, 'node_modules/@deepseek-ai/dsh/package.json');
 const version = JSON.parse(readFileSync(pkgPath)).version;
-assert.ok(/^0\.2\./.test(version), `Unverified host ${version}`);
+assert.ok(/^0\.2\./.test(version), `The deferral verifier targets DSH 0.2.x; ${version} is not covered`);
 
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-mm-deferral-real-'));
 const workspace = join(scratch, 'workspace');

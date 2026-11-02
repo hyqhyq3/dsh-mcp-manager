@@ -2,7 +2,7 @@
 // The two placeholders are replaced before Cordis loads this module.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -16,8 +16,22 @@ async function verify(ctx) {
   const scratch = __SCRATCH__;
   const version = __VERSION__;
   const dshRoot = __DSH_ROOT__;
+  const [, minor, rawPatch] = version.split('.');
+  const patch = parseInt(rawPatch, 10);
+  // 0.2.2 moved the model-facing tool list out of the waterfall payload: the
+  // registry assembles it afterwards, so `deferLoading` has to do the hiding.
+  // 0.2.1 and older still pass `tools` through the waterfall and are filtered
+  // there. Version gate matches the documented boundary.
+  const registryAssembly = Number(minor) > 2 || (Number(minor) === 2 && patch >= 2);
   // DSH 0.2 selects a presentation by mounting an executor in the agent scope.
-  const presentation = await import(pathToFileURL(join(dshRoot, 'node_modules/@deepseek-ai/dsh-agent-tool-presentation/lib/index.js')).href);
+  // A hoisted npm/npx prefix puts the sibling package next to `dsh`; a nested
+  // install keeps it under `dsh/node_modules`. Accept both layouts.
+  const presentationFile = [
+    join(dshRoot, '..', 'dsh-agent-tool-presentation', 'lib', 'index.js'),
+    join(dshRoot, 'node_modules', '@deepseek-ai', 'dsh-agent-tool-presentation', 'lib', 'index.js'),
+  ].find(candidate => existsSync(candidate));
+  assert.ok(presentationFile, `cannot locate @deepseek-ai/dsh-agent-tool-presentation from ${dshRoot}`);
+  const presentation = await import(pathToFileURL(presentationFile).href);
   const handles = [];
   let sequence = 0;
   const calls = [];
@@ -81,13 +95,18 @@ async function verify(ctx) {
       handles.push(handle);
       return handle.agent;
     };
-    // The regression under test: DSH 0.2 never passes `tools` to this waterfall,
-    // so reading it threw on every prompt assembly.
+    // The regression under test: 0.2.2 no longer hands the tool list to this
+    // waterfall, so reading it threw on every prompt assembly (0.2.1 still does).
     const assemble = agent => ctx.systemPrompt.assemble({ agent, scope: agent });
-    // DSH 0.2 dispatches one batch per step; a single-call batch is the same path.
+    // Send the same dual shape the plugin sends: 0.2.2 reads the single-call
+    // batch (`calls`), 0.2.1 and older read the flat fields.
     const execute = async (agent, name, args) => {
+      const callId = `deferral-${++sequence}`;
       const settled = await ctx.tools.execute({
-        calls: [{ id: `deferral-${++sequence}`, name, arguments: JSON.stringify(args) }],
+        calls: [{ id: callId, name, arguments: JSON.stringify(args) }],
+        callId,
+        name,
+        arguments: args,
         agent,
         signal: new AbortController().signal,
       });
@@ -104,12 +123,20 @@ async function verify(ctx) {
     const before = await execute(native, 'mcp__defer__echo_a', { text: 'direct' });
     assert.equal(before.isError, false, JSON.stringify(before));
 
-    // Enabling the broker marks the direct tools deferred; the mark survives the
-    // harness's schema projection but the definitions stay executable.
+    // Enabling the broker hides the direct tools. 0.2.2+ keeps the definitions in
+    // the assembly but marks them `deferLoading`; 0.2.1 and older filter the
+    // waterfall payload, so they are absent from the model-facing list.
     await api('POST', '/settings/on-demand', { enabled: true });
     assembly = await assemble(native);
-    evidence.markedWhileEnabled = direct(assembly).every(tool => tool.deferLoading === true);
-    assert.equal(evidence.markedWhileEnabled, true, 'the broker must mark direct tools deferred');
+    evidence.directToolsInAssemblyWhileEnabled = direct(assembly).length;
+    evidence.deferLoadingMarked = direct(assembly).filter(tool => tool.deferLoading === true).length;
+    if (registryAssembly) {
+      assert.equal(evidence.directToolsInAssemblyWhileEnabled, 2, 'the registry assembly keeps the deferred definitions');
+      assert.equal(evidence.deferLoadingMarked, 2, 'the broker must mark direct tools deferLoading');
+    } else {
+      assert.equal(evidence.directToolsInAssemblyWhileEnabled, 0, 'the waterfall filter removes direct tools');
+      assert.equal(evidence.deferLoadingMarked, 0);
+    }
     const brokerTools = assembly.tools.filter(tool => /^mcp_(search_tools|describe_tool|execute_tool)$/.test(tool.name));
     assert.equal(brokerTools.length, 3);
     assert.equal(brokerTools.every(tool => tool.deferLoading === undefined), true);
@@ -142,7 +169,9 @@ async function verify(ctx) {
       dsh: version,
       node: process.versions.node,
       platform: process.platform,
-      assemblyWithoutTools: 'waterfall payload never carried `tools`',
+      contract: registryAssembly
+        ? 'registry assembly: direct tools stay registered with deferLoading'
+        : 'waterfall filter: direct tools removed from the Assembly payload',
       ...evidence,
       brokerDispatch: 'mcp_execute_tool reached the MCP server',
       ptcDirect: 'run_code reached the MCP server',
