@@ -129,6 +129,12 @@ request.
   `oauth.tokenEndpointAuthMethod`: a hand-edited state file that adds
   `oauth.clientSecret` without that field will not present it (re-authorize to
   re-register), and a registration made before 0.16.1 never had one.
+- The redact-before-truncate fix covers the OAuth registration and token paths.
+  The generic MCP transport error bodies (`MCP <method> HTTP …` and
+  `initialize failed: …`) still truncate before redaction; that pre-existing
+  gap is tracked separately in
+  [issue #30](https://github.com/hyqhyq3/dsh-mcp-manager/issues/30) rather than
+  widening this release.
 - A workspace `mcp.json` hand-edit that changes `clientName` keeps the stored
   token slot until the next authorization re-registers (the editor path drops
   it immediately, like the global editor).
