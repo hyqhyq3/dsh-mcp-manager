@@ -162,7 +162,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 | OAuth 流程 | host 半先发现授权服务器（RFC 9728 受保护资源元数据 → RFC 8414 授权服务器元数据），再做动态客户端注册（或使用手动配置的 Client ID）+ PKCE；重定向落在 DSH GUI webserver 自身挂载的路由上 |
 | OAuth 发现 | 解析 MCP 端点 401 响应里的 `WWW-Authenticate` 的 `resource_metadata` 并缓存到该服务器；资源元数据指出授权服务器，其元数据按 RFC 8414 路径插值 well-known URL 读取（另有 OpenID configuration 与 origin 级探测）。猜测的 `${origin}/oauth/*` 只是最后兜底，并会标记为 fallback |
 | 诊断日志 | 每服务器一个内存环形缓冲（最多 20 条），记录 discovery/register/authorize/token/initialize/tools-list/stdio 各阶段及 URL 与 HTTP 状态，经 `GET /mcp-manager/api/servers/:id/logs` 暴露；写入时即脱敏，且不落盘（写日志文件会引入新的静态密钥面） |
-| Token 存储 | `~/.dsh/mcp-manager.json`；OAuth token 401 时自动刷新。静态 token 从 `tokenEnv` 指定的环境变量读取；配置了 `clientSecretEnv` 时 OAuth `client_secret` 从该环境变量读取，否则使用动态注册签发的 `client_secret`——它和 token 一起存放在同一份 0600 状态文件中，绝不通过 API 返回、也不写入日志。无鉴权服务器不存凭据、也不发送 `Authorization` 头 |
+| Token 存储 | `~/.dsh/mcp-manager.json`；OAuth token 401 时自动刷新。静态 token 从 `tokenEnv` 指定的环境变量读取；配置了 `clientSecretEnv` 时 OAuth `client_secret` 从该环境变量读取，否则使用机密（`client_secret_post`）动态注册签发的 `client_secret`——它和 token 一起存放在同一份 0600 状态文件中，绝不通过 API 返回、也不写入日志。公共客户端（`none`）注册即使被签发了密钥也不会发送，手动配置的 Client ID 也不会复用旧注册的密钥。无鉴权服务器不存凭据、也不发送 `Authorization` 头 |
 | 刷新安全 | 刷新在进程内单飞，并在共享同一状态文件的多个 DSH 进程之间串行：刷新与所有配置写入共享同一把锁，本进程按 FIFO 顺序获得锁，防止较早排队的保存覆盖较晚的保存，锁内重读采用磁盘最新凭据，即使 access token 已过期也使用最新 refresh token。仅合并本进程更改的字段，保留其他进程更新的服务器及工作区凭据。陈旧锁仅在持有者已退出或创建不完整时回收，不会因时间过长抢占活跃进程的锁。陈旧锁回收也互斥；回收进程崩溃留下 `.refresh.lock.reclaim` 时，需要操作员核实并移除该文件后才恢复自动回收，此前写入会超时而不抢锁。状态文件原子替换（0600、fsync + rename）。轮换成功但落盘失败时，该进程继续使用内存中的 access token，但停止后续刷新；先修复状态文件路径，再重新授权。`invalid_grant` 会把服务器标为 `needs-auth` 并停止重放已作废的 token。`/api/servers` 返回 `oauth.expiresAt`、`needsReauth`、`lastRefreshAt`、`lastRefreshError`、`lastToolOkAt`——只有时间戳和错误码，绝不含 token 本身 |
 | 旧状态迁移 | 加载时给缺少 `id` 的服务器补一个并落盘，同时把 `[{ name, value }]` 形式的 env/header 列表归一化为映射——否则按 id 的 API 会 404、数组形式的 env 会被静默丢弃 |
 | MCP 传输（HTTP） | Streamable HTTP（POST JSON-RPC、`Mcp-Session-Id`、SSE/JSON 双格式响应），并在服务器拒绝普通 POST 时自动降级到旧式 HTTP-with-SSE 会话传输（GET 流给出 POST 端点、响应经该流异步回传）；每次请求合并自定义 `headers`/`headerEnv` |
@@ -233,7 +233,8 @@ v0.16.1 的 `test/oauth-dcr-client-name.test.js` 用真实的 `apply()` API 跑�
 拦截的提供方 stub：默认 `client_name` 下公共客户端不发送密钥；配置的 **Client 名称**能通过
 精确名称白名单；只有在授权服务器公布 `client_secret_post` 时才按机密客户端注册；签发的注册
 密钥会被持久化、在换取 token 与刷新时发送，且不出现在任何 API 视图与尝试日志中；
-`clientSecretEnv` 优先于它；修改 Client 名称会重新注册并丢弃旧客户端的 token；0.16.1 之前
+`none` 注册签发的密钥只保存、不发送，手动配置的 Client ID 也不会重放已保存的注册密钥；
+超过截断长度的提供方错误体先脱敏再截断；`clientSecretEnv` 优先于它；修改 Client 名称会重新注册并丢弃旧客户端的 token；0.16.1 之前
 的注册仍被复用；非法名称被拒绝；工作区 `mcp.json` 声明可往返 `clientName`。同一测试还固定了
 本次顺带发现的保存回归：当发现到的授权服务器位于其他 origin 或带路径时（GitHub、Figma），
 无变更的保存不再丢弃缓存的 OAuth 状态；同 origin 的路径变更会保留缓存，而真正的 origin 变更
@@ -259,7 +260,7 @@ DSH 0.2.1-rc.2 Loader、agent、工具注册表和 native 模式 broker，对接
 - stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下整条命令行交给 `cmd.exe`，`&`、`|`、`>`、`%VAR%` 等会被 shell 解释——命令与含空格的参数会被自动加引号（已加引号的原样保留），但仍建议使用绝对路径。
 - 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册；修改配置的 **Client 名称**会用新名称重新注册，旧客户端的 token 随之丢弃（需要重新授权）。手动配置的 Client ID 永远不会被重新注册——其重定向 URI 必须已在提供方白名单里，因此 GUI 换 origin 会表现为提供方侧的重定向错误，而不是自动修复。
 - 尝试日志位于 host 内存：浏览器刷新仍在，DSH 重启后丢失，且每服务器上限 20 条。持久记录仍是 DSH 服务端日志（`ctx.logger`）；插件刻意不写日志文件。
-- 手动 OAuth 字段只做了校验，未在此处对真实提供方验证过；客户端认证方式只支持 `client_secret_post`（不支持 `client_secret_basic`）。部分提供方（Meta、Figma）会对动态注册的 `client_name` 做白名单，支持的做法是填写 **Client 名称**；插件不会把其他产品的名称作为默认值。动态注册签发的 `client_secret` 与 token 一样存放在 `~/.dsh/mcp-manager.json`（0600），不会通过 API 返回，也不会写入日志。
+- 手动 OAuth 字段只做了校验，未在此处对真实提供方验证过；客户端认证方式只支持 `client_secret_post`（不支持 `client_secret_basic`）。部分提供方（Meta、Figma）会对动态注册的 `client_name` 做白名单，支持的做法是填写 **Client 名称**；插件不会把其他产品的名称作为默认值。动态注册签发的 `client_secret` 与 token 一样存放在 `~/.dsh/mcp-manager.json`（0600），不会通过 API 返回，也不会写入日志；只有请求了 `client_secret_post` 的注册才会发送它，手动配置 Client ID 时绝不发送。
 
 ## License
 

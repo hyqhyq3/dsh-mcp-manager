@@ -97,6 +97,11 @@ function startStub({
   issueSecret = false,
   expectedRefreshSecret = null,
   echoSecretOnError = false,
+  // A provider that issues a client_secret even for a `none` registration, and
+  // a secret long enough that a truncated error body would cut off the closing
+  // quote the JSON redaction needs.
+  secretForPublic = false,
+  secretLength = 0,
 } = {}) {
   const registrations = [];
   const forms = [];
@@ -158,7 +163,11 @@ function startStub({
           return send(403, 'Forbidden', { 'Content-Type': 'text/plain' });
         }
         const clientId = `dcr-client-${registrations.length}`;
-        const secret = payload.token_endpoint_auth_method === 'client_secret_post' ? `dcr-secret-${registrations.length}` : '';
+        const confidential = payload.token_endpoint_auth_method === 'client_secret_post';
+        const suffix = secretLength > 0 ? `-${'s'.repeat(secretLength)}` : '';
+        const secret = confidential || secretForPublic
+          ? `dcr-secret-${registrations.length}${suffix}${confidential ? '' : '-public'}`
+          : '';
         registered.set(clientId, secret);
         return send(201, {
           client_id: clientId,
@@ -445,6 +454,94 @@ it('never retains a provider error body that echoes the client secret', async (t
   assert.ok(!logText.includes('dcr-secret-1'), 'the attempt log must redact a JSON-quoted secret');
   assert.ok(logText.includes('<redacted>'));
   assert.equal(state().servers.find((server) => server.id === id).oauth.clientSecret, 'dcr-secret-1', 'the stored secret itself stays only in the 0600 state file');
+});
+
+it('does not present a secret issued by a public-client registration', async (t) => {
+  // An AS can return a client_secret even though the client registered with
+  // token_endpoint_auth_method "none". Presenting it would contradict the
+  // registered method (a strict AS answers invalid_client), so it is stored but
+  // never sent.
+  const stub = await startStub({ secretForPublic: true });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+
+  const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'public-issued', type: 'http', url: stub.mcpUrl });
+  assert.equal(created.code, 201, created.text);
+  const id = created.json.server.id;
+
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(auth.code, 200, auth.text);
+  assert.equal(stub.registrations[0].token_endpoint_auth_method, 'none');
+  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  assert.match(callback.text, /Authorized/);
+  assert.equal(stub.forms[0].get('client_secret'), null, 'a public-client registration must not present a secret');
+
+  const row = state().servers.find((server) => server.id === id);
+  assert.equal(row.oauth.clientSecret, 'dcr-secret-1-public', 'the issued secret is still kept in the 0600 state file');
+  assert.equal(row.oauth.tokenEndpointAuthMethod, 'none');
+
+  stub.revokeAll();
+  const reconnect = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/connect`);
+  assert.equal(reconnect.code, 200, reconnect.text);
+  const refresh = stub.forms.find((form) => form.get('grant_type') === 'refresh_token');
+  assert.ok(refresh, 'a revoked token must trigger a refresh');
+  assert.equal(refresh.get('client_secret'), null, 'refresh must not present a public client secret either');
+});
+
+it('does not replay a stored registration secret with a manual Client ID', async (t) => {
+  const stub = await startStub();
+  t.after(() => stub.close());
+  const id = 'manual-override';
+  // A hand edit replaced the dynamic client with a manual one but left the old
+  // registration's secret behind: it belongs to a different client.
+  writeFileSync(statePath, JSON.stringify({
+    servers: [{
+      id,
+      name: 'manual-override',
+      type: 'http',
+      url: stub.mcpUrl,
+      authMode: 'oauth',
+      clientId: 'manual-client-id',
+      oauth: {
+        clientId: 'dcr-client-1',
+        clientSecret: 'dcr-secret-1',
+        tokenEndpointAuthMethod: 'client_secret_post',
+        tokens: { access_token: 'spent-access', refresh_token: 'stale-refresh', expires_at: 0 },
+      },
+    }],
+  }));
+  const { handler } = makeCtx();
+
+  const reconnect = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/connect`);
+  assert.equal(reconnect.code, 200, reconnect.text);
+  const refresh = stub.forms.find((form) => form.get('grant_type') === 'refresh_token');
+  assert.ok(refresh);
+  assert.equal(refresh.get('client_id'), 'manual-client-id');
+  assert.equal(refresh.get('client_secret'), null, 'a manual client must never send the old registration secret');
+});
+
+it('redacts a long provider error body before truncating it', async (t) => {
+  // The body echoes the secret past the 200-character log cutoff, so the
+  // redaction must run on the whole body: truncating first would store the
+  // unquoted prefix of the secret.
+  const stub = await startStub({ authMethods: ['client_secret_post'], issueSecret: true, echoSecretOnError: true, secretLength: 300 });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'long-echo', type: 'http', url: stub.mcpUrl });
+  assert.equal(created.code, 201, created.text);
+  const id = created.json.server.id;
+
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(auth.code, 200, auth.text);
+  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  assert.match(callback.text, /Token exchange failed/);
+
+  const secret = state().servers.find((server) => server.id === id).oauth.clientSecret;
+  assert.ok(secret.length > 200, 'the echoed secret crosses the truncation point');
+  const prefix = secret.slice(0, 40);
+  assert.ok(!callback.text.includes(prefix), 'the callback page must not carry a secret prefix');
+  const logs = await request(handler, 'GET', `/mcp-manager/api/servers/${id}/logs`);
+  assert.ok(!JSON.stringify(logs.json).includes(prefix), 'the attempt log must not carry a secret prefix');
 });
 
 it('ignores clientName for a manually registered client', async () => {

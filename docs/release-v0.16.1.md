@@ -24,9 +24,19 @@ responsibility and exposes the part that is the provider's policy.
   it keeps `none`, the public-client default MCP expects). The `client_secret`
   returned by the registration is stored as `oauth.clientSecret` inside the same
   0600 state file as the tokens and sent as `client_secret` on token exchange and
-  refresh. `clientSecretEnv` still wins when configured. The value is never
-  returned by a view, an API response or an attempt log (only
+  refresh — but only while the stored registration actually asked for
+  `client_secret_post` (`oauth.tokenEndpointAuthMethod`) and no manual Client ID
+  is configured. A `none` registration never presents a secret (an AS that
+  returns one anyway did not agree to `client_secret_post`, and a strict one
+  answers `invalid_client`), and a manual Client ID never reuses an old dynamic
+  client's secret. `clientSecretEnv` still wins when configured. The value is
+  never returned by a view, an API response or an attempt log (only
   `client_secret issued` is recorded).
+- **Redaction before truncation (review fix).** Provider error bodies were
+  truncated to 200 characters and redacted afterwards, so a JSON-quoted
+  credential whose closing quote fell past the cutoff kept its prefix in the
+  attempt log and on the callback page. The full body is redacted first and only
+  then truncated.
 - **Re-registration semantics.** An unchanged `client_name` reuses the existing
   registration, including one made before `oauth.clientName` was recorded (so an
   upgrade does not force a re-registration). For a dynamically registered
@@ -54,9 +64,9 @@ Executed on macOS (Node v26.8.2) on 2026-11-02. Scratch `HOME`,
 `USERPROFILE` and `DSH_HOME`; loopback stubs only; no real profile and no model
 request.
 
-- `npm test`: **213 passed**, zero failures, cancellations, or skips (200 before
+- `npm test`: **216 passed**, zero failures, cancellations, or skips (200 before
   this release).
-- `test/oauth-dcr-client-name.test.js` (13 cases) runs the real `apply()` API
+- `test/oauth-dcr-client-name.test.js` (16 cases) runs the real `apply()` API
   against a provider-gated stub and covers: the default name with a public client
   that sends no secret; an exact-name allowlist that rejects the default and
   accepts the configured name; `client_secret_post` requested only when
@@ -75,22 +85,31 @@ request.
   slot only while its client identity is unchanged, and dropping a dynamic
   client's slot on a changed name or secret source; a new GUI origin replacing
   the registration without inheriting the old token pair; and a same-origin path
-  change keeping the cached pair while a real origin change drops it.
+  change keeping the cached pair while a real origin change drops it; a
+  public-client registration that is issued a secret anyway never presenting it
+  at exchange or refresh; a hand-edited manual Client ID not replaying the
+  stored registration secret; and a long echoed secret crossing the truncation
+  point surviving neither in the log nor on the callback page.
 - Differential: the same file against the pre-release `0f41abc` `lib/index.js`
-  fails **11 of 13** cases; the two that pass assert preserved behaviour
-  (environment secret precedence and pre-0.16.1 registration reuse).
+  fails **13 of 16** cases; the three that pass assert preserved behaviour
+  (environment secret precedence, a manual Client ID sending no stored secret —
+  trivially true before, because no registration secret was ever sent — and
+  pre-0.16.1 registration reuse).
 - `test/client-language.test.js` keeps the `mcp` dictionaries balanced and
   asserts the **Client name** input (localized placeholder) renders, updates and
   disappears with the auth mode; `lib/client.js` was syntax-checked.
-- Two independent read-only reviews of the final diff found no secret
-  serialized into a view, API response or log. They did find four defects, all
-  fixed with regression tests before the PR: the workspace `keepOAuth` name
-  comparison dropping a manual client's token slot; the workspace PUT erasing
-  an omitted field (which then dropped the slot); a rename-derived default
-  client name not invalidating the cache; and a JSON-quoted secret in a
-  provider error body surviving log/page redaction. A follow-up pass also
-  localized the new input's placeholder and replaced a vacuous `/workspaces`
-  secret assertion with real coverage.
+- Three independent read-only reviews of the final diff found no secret
+  serialized into a view, API response or shipped client. They did find seven
+  defects, all fixed with regression tests before the PR: the workspace
+  `keepOAuth` name comparison dropping a manual client's token slot; the
+  workspace PUT erasing an omitted field (which then dropped the slot); a
+  rename-derived default client name not invalidating the cache; a JSON-quoted
+  secret in a provider error body surviving log/page redaction; a secret issued
+  by a `none` registration being presented at the token endpoint; a manual
+  Client ID replaying the previous dynamic client's stored secret after a hand
+  edit; and redaction running after truncation, which kept a long secret's
+  prefix. A follow-up pass also localized the new input's placeholder and
+  replaced a vacuous `/workspaces` secret assertion with real coverage.
 
 ## Known boundaries
 
@@ -101,9 +120,15 @@ request.
   replaced registration) drops the cached registration and tokens; the cached
   issuer is refreshed by discovery, not compared by the editor.
 - Redaction masks known credential field names (query string, `key=value`,
-  JSON-quoted) and `Bearer` values. A provider echoing a secret under an
-  unrelated field name would still be stored verbatim; the plugin itself never
-  puts a credential into an error message or a log entry.
+  JSON-quoted) and `Bearer` values, and it runs on the full body before any
+  truncation. A provider echoing a secret under an unrelated field name, or
+  inside an escaped/double-encoded JSON string, would still be stored when it
+  passes none of those forms; the plugin itself never puts a credential into an
+  error message or a log entry.
+- Sending the registration secret depends on the stored
+  `oauth.tokenEndpointAuthMethod`: a hand-edited state file that adds
+  `oauth.clientSecret` without that field will not present it (re-authorize to
+  re-register), and a registration made before 0.16.1 never had one.
 - A workspace `mcp.json` hand-edit that changes `clientName` keeps the stored
   token slot until the next authorization re-registers (the editor path drops
   it immediately, like the global editor).
@@ -119,3 +144,6 @@ request.
 - Windows and a live browser click-through.
 - Whether Meta's or Figma's allowlists change over time; `clientName` makes the
   name an operator choice rather than a plugin guess.
+- A real provider that issues a `client_secret` for a `none` registration: the
+  stub covers the guard (the secret is stored but never presented); no live AS
+  was exercised.
