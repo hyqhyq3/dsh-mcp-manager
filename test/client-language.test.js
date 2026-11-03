@@ -169,22 +169,27 @@ it('collects manual OAuth client credentials only while OAuth is selected', asyn
 
   assert.match(text(tree), /OAuth Client ID/);
   assert.match(text(tree), /Client secret environment variable name/);
+  assert.match(text(tree), /OAuth client name/);
   assert.match(text(tree), /Scopes \(optional/);
   const inputs = nodes(tree).filter((node) => node.type === 'input');
   const clientIdInput = inputs.find((node) => node.props.placeholder === 'Ov23li…');
   const secretInput = inputs.find((node) => node.props.placeholder === 'GITHUB_OAUTH_CLIENT_SECRET');
+  const clientNameInput = inputs.find((node) => node.props.placeholder === 'dsh-mcp-manager-my-server');
   const scopeInput = inputs.find((node) => node.props.placeholder === 'repo read:org');
-  assert.ok(clientIdInput && secretInput && scopeInput, 'all three OAuth fields render');
+  assert.ok(clientIdInput && secretInput && clientNameInput && scopeInput, 'all four OAuth fields render');
   clientIdInput.props.onChange({ target: { value: 'my-client' } });
   secretInput.props.onChange({ target: { value: 'MY_SECRET_ENV' } });
+  clientNameInput.props.onChange({ target: { value: 'acme-dcr-client' } });
   scopeInput.props.onChange({ target: { value: 'repo' } });
   tree = app.render(form.type, form.props);
+  assert.equal(nodes(tree).find((node) => node.props.placeholder === 'dsh-mcp-manager-my-server').props.value, 'acme-dcr-client');
 
   // Switching to a non-OAuth mode hides them again.
   nodes(tree).find((node) => node.type === 'select' && node.props.value === 'oauth').props.onChange({ target: { value: 'none' } });
   tree = app.render(form.type, form.props);
   assert.doesNotMatch(text(tree), /OAuth Client ID/);
   assert.doesNotMatch(text(tree), /Client secret environment variable name/);
+  assert.doesNotMatch(text(tree), /OAuth client name/);
 });
 
 it('edits and clears tool-call timeouts for both transports and scopes', async () => {
