@@ -24,7 +24,7 @@
 - **stdio 本地进程**：直接跑 `npx` / `uvx` / `python` 等命令，插件用 JSON-RPC over stdin/stdout 与之通信（自动拉起子进程、重连、退出时回收），无需任何远程服务器或认证。Windows 的 `.cmd` shim（如 `npx.cmd`）通过 `cmd.exe` 解析。
 - **HTTP-with-SSE 服务器**：自动识别并接入旧式 SSE 传输（GET 事件流先给出会话端点，响应全部经该流异步回传），服务器拒绝普通 POST 时自动切换。Streamable HTTP 服务器不受影响。
 - **就地编辑**：重命名、stdio ↔ HTTP 切换、改认证方式/标头，无需删除重建。
-- **界面内诊断**：失败的服务器在**折叠状态**就显示失败原因（无需展开），展开后还有 **日志 / Logs** 面板——按需加载、已脱敏的轨迹，覆盖每一次发现 URL 与 HTTP 状态、客户端注册、授权跳转、token 交换/刷新、`initialize`、`tools/list`，以及 stdio 子进程退出时的 stderr 尾部。脱敏在**写入时**完成（Bearer 值、`code`/`state`、`client_secret`、token 一律剥掉），而不是渲染时。
+- **界面内诊断**：失败的服务器在**折叠状态**就显示失败原因（无需展开），展开后还有 **日志 / Logs** 面板——按需加载、已脱敏的轨迹，覆盖每一次发现 URL 与 HTTP 状态、客户端注册、授权跳转、token 交换/刷新、`initialize`、`tools/list`，以及 stdio 子进程退出时的 stderr 尾部。脱敏在**写入时**完成（Bearer 值、`code`/`state`、`client_secret`、token 一律剥掉），而不是渲染时。MCP 传输错误先脱敏再截断，工具列表刷新警告也在写入宿主日志前采用相同的脱敏处理。
 - **工具注册**：与内置客户端相同的 `mcp__<server>__<rawName>` 命名约定，含 DSH 工具注册表的严格 schema 清洗，并标记 `isConcurrencySafe`。
 - **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话；每条服务器（全局或工作区本地）都有独立的「在此工作区启用」开关，且不影响其他工作区。
 - **可选按需 broker**：模型侧固定只暴露 `mcp_search_tools`、`mcp_describe_tool`、`mcp_execute_tool`，不再每轮发送所有 `mcp__*` schema。默认关闭，必须手动开启。 `mcp_search_tools` 是零依赖词法排序器（BM25 + CJK/别名/模糊，且支持列目录兜底）。DSH 0.2.2 及更新版本用注册表的 `deferLoading` 标记隐藏直连工具，`0.2.1` 及更老的 harness 则在提示词瀑布里过滤。
@@ -181,7 +181,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 发行版不可变且带 tag，消费者可以固定到某个版本：
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.16.1
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.16.2
 ```
 
 DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.12.0 发行 = `b029407ca3d258e83abac6c06ff94f92e5687164`；每次推送后由商城重新固定最新发行版）。
@@ -241,6 +241,8 @@ v0.16.1 的 `test/oauth-dcr-client-name.test.js` 用真实的 `apply()` API 跑�
 会丢弃；改名导致默认名称变化时会重新注册；更换 GUI origin 会重新注册且不继承旧 token 对；
 提供方错误体回显的密钥会同时从尝试日志和回调页中脱敏。真实 Figma 授权/换取 token 往返仍未验证；证据与边界见
 [v0.16.1 验证记录](docs/release-v0.16.1.md)。本次不扩展 DSH 兼容性声明矩阵。
+
+v0.16.2 / issue #30 的回归覆盖见 `test/transport-redaction.test.js`：loopback MCP 服务在 JSON 与自由文本错误中回显长合成凭据，覆盖初始化、工具调用、权限不足和工具列表刷新警告。`node scripts/verify-transport-redaction-dsh.mjs <DSH-prefix>` 还通过真实 DSH Loader、Web API 与结构化宿主日志校验无密钥快照。脱敏识别凭据字段和 Bearer 值，不识别任意无标记的秘密文本。结果与边界见 [v0.16.2 验证记录](docs/release-v0.16.2.md)。
 
 下一个门禁：真实 Profile 的回读（解析出的版本、运行进程、设置 → MCP 页面可见），以及在分发场景下对已打 tag 产物的免登录回读。在这些证据补齐之前，兼容性声明只代表一次性 Profile 的验证结果，**不代表**你的实际安装已被验证；DSH STORE 的上架状态同理。
 

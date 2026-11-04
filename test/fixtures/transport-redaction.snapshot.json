@@ -1,0 +1,6 @@
+{
+  "initialize": "initialize HTTP 400: {\"access_token\":\"<redacted>\",\"reason\":\"rejected\"}",
+  "attempt": "initialize HTTP 400: {\"access_token\":\"<redacted>\",\"reason\":\"rejected\"}",
+  "refreshRequests": 1,
+  "hostWarning": "mcp-manager: refreshing tools for live failed: MCP tools/list: {\"access_token\":\"<redacted>\",\"reason\":\"rejected\"}"
+}

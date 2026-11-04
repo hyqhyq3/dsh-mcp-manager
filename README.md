@@ -31,7 +31,7 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 - **stdio local processes**: run `npx` / `uvx` / `python` etc. directly; the plugin speaks JSON-RPC over the child's stdin/stdout (spawns the process, reconnects, and reaps it on exit) — no remote server or auth required. Windows `.cmd` shims (e.g. `npx.cmd`) are resolved through `cmd.exe`.
 - **HTTP-with-SSE servers**: the legacy SSE transport (a GET event stream that advertises a session endpoint, with replies delivered asynchronously on that stream) is detected automatically and used when a server rejects a plain POST. Streamable HTTP servers are unaffected.
 - **Edit-in-place**: rename a server, switch stdio ↔ HTTP, or change auth/headers without deleting and re-adding it.
-- **In-GUI diagnostics**: a failed server shows its reason on the collapsed card (no need to expand it), and the expanded card has a **Logs** panel — an on-demand, redacted trace of every discovery URL and HTTP status, client registration, authorization, token exchange/refresh, `initialize`, `tools/list`, and the stderr tail of a stdio child that exited. Secrets (bearer values, `code`/`state`, `client_secret`, tokens) are stripped when the entry is written, never when it is rendered.
+- **In-GUI diagnostics**: a failed server shows its reason on the collapsed card (no need to expand it), and the expanded card has a **Logs** panel — an on-demand, redacted trace of every discovery URL and HTTP status, client registration, authorization, token exchange/refresh, `initialize`, `tools/list`, and the stderr tail of a stdio child that exited. Secrets (bearer values, `code`/`state`, `client_secret`, tokens) are stripped when the entry is written, never when it is rendered. MCP transport errors are redacted before truncation, and tool-list refresh warnings use the same redaction before reaching the host logger.
 - **Tool registration** with the same `mcp__<server>__<rawName>` naming convention as the built-in client, including strict-schema sanitization for the DSH tool registry and `isConcurrencySafe` marking.
 - **Workspace isolation**: declare per-project servers in `<workspace>/.dsh/dshmm/mcp.json` — their tools register only into that workspace's sessions, and every row (global or workspace-local) has a per-workspace **enable** switch that never affects other workspaces.
 - **Opt-in on-demand broker**: keep the model-facing MCP surface fixed at `mcp_search_tools`, `mcp_describe_tool`, and `mcp_execute_tool` instead of sending every `mcp__*` schema on every Native-mode request. It is disabled by default. `mcp_search_tools` is a zero-dependency lexical ranker (BM25 + CJK/alias/fuzzy, plus a catalog-listing fallback). Direct tools are hidden with the registry's `deferLoading` marker on DSH 0.2.2 and newer; `0.2.1` and older get the equivalent filter in the system-prompt waterfall.
@@ -194,7 +194,7 @@ attempts cannot restore tools or clear a newer connection.
 Releases are immutable and tagged, so consumers can pin one:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.16.1
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.16.2
 ```
 
 The DSH STORE catalog additionally pins a full 40-character commit instead of a floating branch (release 0.12.0 = `b029407ca3d258e83abac6c06ff94f92e5687164`; the store re-pins the newest release after each push).
@@ -274,6 +274,8 @@ and a provider error body echoing the secret is redacted from the attempt log
 and the callback page. A real Figma consent/token round trip remains unverified;
 see [v0.16.1 verification](docs/release-v0.16.1.md). This does not expand the
 DSH compatibility matrix.
+
+For v0.16.2 / issue #30, regression coverage lives in `test/transport-redaction.test.js`: a loopback MCP server echoes long synthetic credentials in JSON and free-form errors, including initialization, tool calls, scope failures and tool-list refresh warnings. `node scripts/verify-transport-redaction-dsh.mjs <DSH-prefix>` also checks a keyless snapshot through a real DSH Loader, web API and structured host logger. Redaction recognizes credential fields and Bearer values; it does not identify arbitrary unlabeled secrets. See [v0.16.2 verification](docs/release-v0.16.2.md) for results and limits.
 
 Next gate: a real-profile readback (resolved version, running process, visible Settings → MCP page) plus, for distribution, an unauthenticated readback of the tagged artifacts. Until those are recorded, read the compatibility declarations as disposable-profile verification only — not as proof of a live installation. The same applies to listing status on DSH STORE.
 
