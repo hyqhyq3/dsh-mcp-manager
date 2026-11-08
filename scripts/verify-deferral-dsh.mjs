@@ -18,6 +18,9 @@ const scratch = mkdtempSync(join(tmpdir(), 'dsh-mm-deferral-real-'));
 const workspace = join(scratch, 'workspace');
 mkdirSync(workspace);
 const resultPath = join(scratch, 'result.json');
+// The web profile prints its launcher token in the boot URL; exchanging it on
+// /connect yields the API operator session cookie the fenced admin API needs.
+const tokenPath = join(scratch, 'launch-token.txt');
 const verifier = join(scratch, 'verify.mjs');
 const fixture = fileURLToPath(new URL('./fixtures/deferral-dsh-verifier.mjs', import.meta.url));
 writeFileSync(verifier, readFileSync(fixture, 'utf8')
@@ -34,7 +37,11 @@ const child = spawn(process.execPath, [join(runtime, 'node_modules/@deepseek-ai/
   env: { ...process.env, HOME: scratch, USERPROFILE: scratch, DSH_HOME: join(scratch, '.dsh'), DEEPSEEK_API_KEY: '', PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH}` },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-child.stdout.on('data', chunk => output += chunk);
+child.stdout.on('data', chunk => {
+  output += chunk;
+  const match = output.match(/[?&]token=([^\s"&]+)/);
+  if (match && !existsSync(tokenPath)) writeFileSync(tokenPath, match[1]);
+});
 child.stderr.on('data', chunk => output += chunk);
 const exit = new Promise(resolveExit => child.once('exit', resolveExit));
 child.on('error', error => { output += error.stack; });

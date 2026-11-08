@@ -170,7 +170,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 | MCP 传输（stdio） | `child_process.spawn` 拉起本地命令，JSON-RPC over stdin/stdout（换行分隔），重连时先回收旧进程。Windows 下经 `cmd.exe` 启动以解析 `.cmd` shim |
 | 工具 schema | 服务器 JSON Schema 清洗为注册表支持的 raw 子集（不支持的关键字降级为无约束） |
 | 图片结果 | `output.render` 文本优先；`execute(args, exec)` 暂存投影，`finalizeContent` 仅在路由模型声明图片输入时装上持久化 DSH attachment，其余情况降级为文本占位符 |
-| 按需 broker | Profile 开关注册三个 broker 工具；DSH `0.2.2+` 上原始 `mcp__*` 定义保留 `deferLoading` 标记（由 provider 适配器隐藏），老 harness 在提示词瀑布里过滤；执行守卫只放行 `mcp_execute_tool`（以及执行器拥有提示词 section 的 PTC 程序） |
+| 按需 broker | Profile 开关注册三个 broker 工具；DSH `0.2.2+` 上原始 `mcp__*` 定义保留 `deferLoading` 标记（由 provider 适配器隐藏），老 harness 在提示词瀑布里过滤；模型目录缺少 `toolUpdate` 的路由上，插件按 agent 注册影子桩，使全量 schema 不再发往 provider（#33 缓解）；执行守卫只放行 `mcp_execute_tool`（以及执行器拥有提示词 section 的 PTC 程序） |
 | 工具列表变化 | stdio 通知与 Streamable HTTP SSE 通道触发重新读取 `tools/list`；未变化的注册保持挂载 |
 | 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并对 `exclude`/`disabled` 中的全局名称应用 `tools.restrict({ deny })`；`disabled` 的工作区本地服务器保持声明，但不连接、不注册 |
 | 新版本兼容 | 组合出的 agent setup 优先取 setup 回调的第二个参数（DSH 0.1.5-alpha.1 起），仅在缺失时回退到旧的 `agent` 上下文访问器。新版 harness 移除了该访问器，直接读 `ctx.agent` 会抛 `cannot get property "agent" without inject`，导致每次 `agents.resume`/`create` 失败。GUI webserver 改为惰性注入，没有它的 profile 也能继续注册 MCP 工具，而不会留下未激活的条目 |
@@ -259,7 +259,7 @@ DSH 0.2.1-rc.2 Loader、agent、工具注册表和 native 模式 broker，对接
 
 - 只桥接 MCP 的工具能力（resources / prompts 不支持）。
 - 按需过滤支持 `native` 呈现。Code/PTC/both agent 保留当前会话可见的完整 MCP 目录；其呈现方式取自执行器的提示词 section（harness 仍提供瀑布载荷时也读该载荷）。导出的 SDK renderer 未提供“仅呈现目录”的契约，见[接口证据与降级方案](docs/on-demand-code-mode.md)；完整 SDK 压缩仍由 [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18) 跟进。
-- 在 DSH ≤ 0.2.2-rc.1 上，按需过滤只有在模型目录声明了 `toolUpdate` 的路由上才能收起 schema（deepseek-official 即是）。没有 `toolUpdate` 的 provider（`llm-pi-ai` 后端的 `api: openai-completions` 是常见组合）会走核心的"立即可用工具"分支——该分支在插件返回之后剥掉 `deferLoading` 标记——因此全部 `mcp__*` schema 仍会随每次请求发给 provider；broker 的守卫依旧会拒绝直连调用（[#33](https://github.com/hyqhyq3/dsh-mcp-manager/issues/33)，核心修复待上游跟进；过渡方案是改走 deepseek-official，或对小的服务器直接用整量注册、不开按需）。
+- 在 DSH ≤ 0.2.2-rc.1 上，按需过滤只有在模型目录声明了 `toolUpdate` 的路由上才能收起 schema（deepseek-official 即是）。没有 `toolUpdate` 的 provider（`llm-pi-ai` 后端的 `api: openai-completions` 是常见组合）会走核心的"立即可用工具"分支——该分支在插件返回之后剥掉 `deferLoading` 标记——否则全部 `mcp__*` schema 会随每次请求发给 provider。自 v0.17.0 起插件自行做了缓解：在这类路由上，每个 native agent 都会拿到**按 agent 的影子桩（shadow stubs）**——在其自身工具作用域内注册同名 `mcp__<服务器>__<工具>`、短指针描述、空参数 schema 的桩定义——使请求载荷从全量 schema 收敛为 broker 三件套加每工具一条桩（[#33](https://github.com/hyqhyq3/dsh-mcp-manager/issues/33) 报告实测 197 个工具要花 82k token），同时 `mcp_search_tools`/`mcp_describe_tool` 仍从插件自有的注册存储中返回完整 schema。支持路由（deepseek-official）、code/PTC/both agent，以及任何模型路由解析失败的情形都保持原有的完整面；上游核心修复（按 adapter 保留或尊重该标记）仍是最正确的最终状态，见 issue 线程。
 - OAuth token 明文存于 `~/.dsh` 下的 JSON 文件——请当作机密对待。静态 token 与 `headerEnv` 的值从环境变量读取，不落盘。工作区 OAuth token 也存于同一状态文件，不写进工作区的 `mcp.json`。
 - stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下整条命令行交给 `cmd.exe`，`&`、`|`、`>`、`%VAR%` 等会被 shell 解释——命令与含空格的参数会被自动加引号（已加引号的原样保留），但仍建议使用绝对路径。
 - 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册；修改配置的 **Client 名称**会用新名称重新注册，旧客户端的 token 随之丢弃（需要重新授权）。手动配置的 Client ID 永远不会被重新注册——其重定向 URI 必须已在提供方白名单里，因此 GUI 换 origin 会表现为提供方侧的重定向错误，而不是自动修复。
