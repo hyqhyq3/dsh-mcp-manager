@@ -259,6 +259,7 @@ DSH 0.2.1-rc.2 Loader、agent、工具注册表和 native 模式 broker，对接
 
 - 只桥接 MCP 的工具能力（resources / prompts 不支持）。
 - 按需过滤支持 `native` 呈现。Code/PTC/both agent 保留当前会话可见的完整 MCP 目录；其呈现方式取自执行器的提示词 section（harness 仍提供瀑布载荷时也读该载荷）。导出的 SDK renderer 未提供“仅呈现目录”的契约，见[接口证据与降级方案](docs/on-demand-code-mode.md)；完整 SDK 压缩仍由 [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18) 跟进。
+- 在 DSH ≤ 0.2.2-rc.1 上，按需过滤只有在模型目录声明了 `toolUpdate` 的路由上才能收起 schema（deepseek-official 即是）。没有 `toolUpdate` 的 provider（`llm-pi-ai` 后端的 `api: openai-completions` 是常见组合）会走核心的"立即可用工具"分支——该分支在插件返回之后剥掉 `deferLoading` 标记——因此全部 `mcp__*` schema 仍会随每次请求发给 provider；broker 的守卫依旧会拒绝直连调用（[#33](https://github.com/hyqhyq3/dsh-mcp-manager/issues/33)，核心修复待上游跟进；过渡方案是改走 deepseek-official，或对小的服务器直接用整量注册、不开按需）。
 - OAuth token 明文存于 `~/.dsh` 下的 JSON 文件——请当作机密对待。静态 token 与 `headerEnv` 的值从环境变量读取，不落盘。工作区 OAuth token 也存于同一状态文件，不写进工作区的 `mcp.json`。
 - stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下整条命令行交给 `cmd.exe`，`&`、`|`、`>`、`%VAR%` 等会被 shell 解释——命令与含空格的参数会被自动加引号（已加引号的原样保留），但仍建议使用绝对路径。
 - 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册；修改配置的 **Client 名称**会用新名称重新注册，旧客户端的 token 随之丢弃（需要重新授权）。手动配置的 Client ID 永远不会被重新注册——其重定向 URI 必须已在提供方白名单里，因此 GUI 换 origin 会表现为提供方侧的重定向错误，而不是自动修复。
