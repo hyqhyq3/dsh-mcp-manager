@@ -37,11 +37,11 @@ function makeCtx(config) {
     logger: { info() {}, warn() {}, error() {} },
     tools: { guard: () => () => {}, register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
     webServer: { register: (route) => { routes.push(route); return () => {}; } },
-    get: () => undefined,
+    get: (name) => (name === 'connection' ? { requestRejection: () => undefined } : undefined),
     on: () => () => {},
     inject: (names, callback) => {
       if (typeof callback === 'function' && names.includes('webServer')) {
-        callback({ webServer: ctx.webServer, get: () => undefined, effect });
+        callback({ webServer: ctx.webServer, get: (name) => (name === 'connection' ? { requestRejection: () => undefined } : undefined), effect });
       }
       return { dispose: () => {} };
     },

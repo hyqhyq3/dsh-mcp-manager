@@ -32,7 +32,7 @@ function mount(t, config = {}) {
   const webServer = { register: route => { handler = route.handler; return () => {}; } };
   mod.apply({
     logger: { info() {}, warn() {}, error() {} }, tools: registry,
-    get: name => name === 'workspaceRegistry' ? { list: () => [{ path: workspace }] } : undefined,
+    get: name => name === 'connection' ? { requestRejection: () => undefined } : name === 'workspaceRegistry' ? { list: () => [{ path: workspace }] } : undefined,
     on: () => () => {}, effect,
     inject: (names, callback) => { callback({ agents, webServer, effect }); return { dispose() {} }; },
   }, config);

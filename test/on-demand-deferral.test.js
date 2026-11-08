@@ -34,7 +34,7 @@ function mount(t, initialState, seed = [], executeShape = 'batch') {
     register: definition => { tools.set(definition.name, definition); return () => tools.delete(definition.name); },
     guard: guard => { guards.push(guard); return () => {}; },
     restrict: () => () => {},
-    get: name => tools.get(name),
+    get: name => name === 'connection' ? { requestRejection: () => undefined } : tools.get(name),
     schemas: () => [...tools.values()].map(({ name, description, parameters, deferLoading }) => ({
       name,
       description,
@@ -53,7 +53,7 @@ function mount(t, initialState, seed = [], executeShape = 'batch') {
   mod.apply({
     logger: { info() {}, warn() {}, error() {} },
     tools: registry,
-    get: () => undefined,
+    get: name => (name === 'connection' ? { requestRejection: () => undefined } : undefined),
     on: (event, fn, options) => { hooks.push({ event, fn, options }); return () => {}; },
     effect,
     inject: (names, callback) => { callback({ agents, webServer, effect }); return { dispose() {} }; },

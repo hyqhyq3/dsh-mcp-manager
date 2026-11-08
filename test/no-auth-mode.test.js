@@ -27,9 +27,10 @@ function makeCtx({ workspacePath } = {}) {
     logger: { info() {}, warn() {}, error() {} },
     tools: { guard: () => () => {}, register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
     webServer: { register: (route) => { routes.push(route); return () => {}; } },
-    get: (name) => (name === 'workspaceRegistry' && workspacePath
-      ? { list: () => [{ path: workspacePath }] }
-      : undefined),
+    get: (name) => (name === 'connection' ? { requestRejection: () => undefined }
+      : name === 'workspaceRegistry' && workspacePath
+        ? { list: () => [{ path: workspacePath }] }
+        : undefined),
     on: () => () => {},
     // The plugin injects 'webServer' lazily (it is optional), so hand the
     // callback a child ctx exposing the stubbed webserver.
@@ -37,7 +38,7 @@ function makeCtx({ workspacePath } = {}) {
       if (typeof callback === 'function' && names.includes('webServer')) {
         callback({
           webServer: ctx.webServer,
-          get: () => undefined,
+          get: ctx.get,
           effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose(); }; },
         });
       }
