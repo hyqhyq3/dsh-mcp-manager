@@ -61,9 +61,11 @@ async function startShadowMcp() {
  * Mount the plugin over a stub global registry; each test agent gets a scoped
  * registry of its own, mirroring dsh-tools: scoped registrations shadow
  * same-name globals, and teardown effects recorded on the agent ctx are
- * replayed by tests.
+ * replayed by tests. `opts.hidden` names tools the agent-visible `schemas`
+ * view omits, simulating a foreign `toolFilter` restrict mask on inherited
+ * globals (the mask applies to the view, not to the registration store).
  */
-function mount(t, initialState, { llm } = {}) {
+function mount(t, initialState, { llm, hidden } = {}) {
   writeFileSync(statePath, JSON.stringify(initialState));
   const tools = new Map();
   const scopedByAgent = new Map();
@@ -90,9 +92,11 @@ function mount(t, initialState, { llm } = {}) {
     schemas: agent => {
       const merged = new Map(tools);
       for (const [name, definition] of scopedByAgent.get(agent) ?? []) merged.set(name, definition);
-      return [...merged.values()].map(({ name, description, parameters, deferLoading }) => ({
-        name, description, parameters, ...deferLoading === true ? { deferLoading } : {},
-      }));
+      return [...merged.values()]
+        .filter(definition => hidden?.has(definition.name) !== true)
+        .map(({ name, description, parameters, deferLoading }) => ({
+          name, description, parameters, ...deferLoading === true ? { deferLoading } : {},
+        }));
     },
     selectExecutor: agent => (agent === codeAgent ? { sections: [{ name: 'tools:sdk' }] } : { describe: () => ({ schemas: [] }) }),
     execute: async input => {
@@ -289,4 +293,41 @@ it('replays the agent teardown effect and leaves no stale shadow rows', async t 
   for (const fn of native.effects) fn()?.();
   assert.equal(native.scoped.size, 0, 'the agent teardown effect removes the shadow registrations');
   assert.deepEqual(tools.get('mcp__bbox__echo_a').parameters, FULL_TEXT_PARAMS, 'the global tier is untouched by teardown');
+});
+
+it('never stubs a name outside the agent\'s pre-shadow visible surface (foreign toolFilter)', async t => {
+  const fixture = await startShadowMcp();
+  t.after(() => fixture.close());
+  const llm = { resolveModelInfo: async () => ({ name: 'm' }) };
+  const hidden = new Set();
+  const { tools, hooks, makeScope, request } = mount(t, { servers: [], onDemandToolInjection: true }, { llm, hidden });
+  await connectFixture(t, request, fixture, 'bbox');
+
+  // A subagent's toolFilter restrict hides one echo tool from this agent's
+  // view of the inherited globals before any shadow row materializes.
+  hidden.add('mcp__bbox__echo_b');
+  const native = makeScope('native');
+  await assemble(hooks, native, { provider: 'custom', model: 'v1' });
+  assert.ok(native.scoped.get('mcp__bbox__echo_a'), 'a visible name still gets its stub');
+  assert.equal(native.scoped.get('mcp__bbox__echo_b'), undefined, 'a name absent from the pre-shadow visible surface gets no stub');
+
+  const exec = { agent: native, token: Symbol('broker'), callId: 'outer', rootCallId: 'root', signal: new AbortController().signal };
+  const searched = await tools.get('mcp_search_tools').execute({ query: '' }, exec);
+  assert.equal(searched.total, 1, JSON.stringify(searched));
+  assert.equal(searched.matches[0].name, 'mcp__bbox__echo_a', 'search never surfaces the masked name');
+  await assert.rejects(
+    tools.get('mcp_describe_tool').execute({ name: 'mcp__bbox__echo_b' }, exec),
+    /not visible/,
+    'describe does not surface the masked name',
+  );
+
+  // A toggle flip disposes the row and its baseline; the foreign filter lifted
+  // before the next sync means the fresh snapshot now admits the name.
+  await request('POST', '/settings/on-demand', { enabled: false });
+  hidden.delete('mcp__bbox__echo_b');
+  const enabled = await request('POST', '/settings/on-demand', { enabled: true });
+  assert.equal(enabled.onDemandToolInjection, true, 'the toggle re-arms the broker runtime');
+  await assemble(hooks, native, { provider: 'custom', model: 'v1' });
+  assert.ok(native.scoped.get('mcp__bbox__echo_b'), 'the re-snapshotted baseline stubs the now-visible name');
+  assert.ok(native.scoped.get('mcp__bbox__echo_a'));
 });

@@ -62,6 +62,15 @@ marker per adapter) as the right final state.
   describe result field wording changed to "The tool's full normalized input
   schema." For names the plugin does not own (foreign `mcp__*`
   registrations) the visible fields are served, out of documented scope.
+- (Follow-up while unreleased.) Own-scope stubs bypass foreign restrict
+  masks, so the first sync that materializes an agent's row snapshots the
+  agent's visible pre-shadow nameset as the row's baseline and registers
+  stubs only for that intersection; a foreign `toolFilter` mask (a subagent's
+  `restrict`) therefore keeps the masked name unresolvable exactly as
+  pre-v0.17.0. The baseline is kept only while stubs exist, dropped with the
+  row, and re-snapshotted on the next sync; a mask applied after an agent's
+  already-materialized stubs leaves those stubs shadowing it (residual,
+  narrow).
 
 ## Verification
 
@@ -91,6 +100,13 @@ marker per adapter) as the right final state.
   with a `modelSelection` naming an unregistered provider, asserting the
   fail-safe leaves the marked global definitions in the agent's visible view.
 
+- (Follow-up verification while unreleased.) A pinned case reproduces the
+  foreign-mask regression shape (a subagent `toolFilter` restrict that hides
+  one owned name before the first shadow sync) and stubs never register for a
+  name absent from the pre-shadow baseline; a toggle flip re-snapshots the
+  baseline. Full suite 283 tests, 0 failures; the deferral verifier above was
+  re-run with `ok: true` on the same default targets.
+
 ## Limits
 
 - No model request was submitted, and no live provider route was exercised:
@@ -114,6 +130,12 @@ marker per adapter) as the right final state.
   release that preserves the marker upstream supersedes this plugin-side
   surface (the shadow path is driven only where the route still resolves to
   a marker-stripping model).
+- (Follow-up while unreleased.) The baseline snapshot is the foreign-mask
+  contract for stubs: own-scope registrations bypass foreign restrict masks,
+  so a name hidden in the agent's visible view at the row's first
+  materialization never gets a stub. A foreign mask applied later — after an
+  agent's stubs are already materialized — leaves the registered stub
+  shadowing the masked name until the row disposes (residual, narrow).
 
 中文：v0.17.0 在模型目录缺少 `toolUpdate` 的路由上为 native agent 按需注册按 agent 的
 影子桩（空参数 schema + 指针描述），把承载全量 `mcp__*` schema 的请求面收敛为 broker
