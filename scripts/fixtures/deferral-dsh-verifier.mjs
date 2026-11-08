@@ -2,7 +2,7 @@
 // The two placeholders are replaced before Cordis loads this module.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -67,11 +67,23 @@ async function verify(ctx) {
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const origin = () => `http://127.0.0.1:${ctx.webServer.port}`;
-    await until(async () => ctx.webServer.port && (await fetch(origin() + '/mcp-manager/api/ping')).ok);
+    // Plugin prefix routes sit behind the DSH connection fence, so the verifier
+    // exchanges the launcher token the wrapper captured for an API operator
+    // session cookie and carries it on every admin call.
+    const tokenPath = join(scratch, 'launch-token.txt');
+    const sessionCookie = () => fetch(origin() + '/connect?token=' + encodeURIComponent(readFileSync(tokenPath, 'utf8').trim()), { redirect: 'manual' })
+      .then(response => response.headers.get('set-cookie')?.split(';')[0] ?? '');
+    let cookie = '';
+    await until(async () => {
+      if (!ctx.webServer.port || !existsSync(tokenPath)) return false;
+      cookie = await sessionCookie();
+      return cookie !== '' && (await fetch(origin() + '/mcp-manager/api/ping', { headers: { cookie } })).ok;
+    });
+    assert.ok(cookie !== '', 'the launcher token must exchange for an API session cookie');
     const api = async (method, path, body) => {
       const response = await fetch(origin() + '/mcp-manager/api' + path, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const value = await response.json();
@@ -97,7 +109,11 @@ async function verify(ctx) {
     };
     // The regression under test: 0.2.2 no longer hands the tool list to this
     // waterfall, so reading it threw on every prompt assembly (0.2.1 still does).
-    const assemble = agent => ctx.systemPrompt.assemble({ agent, scope: agent });
+    const assemble = (agent, modelSelection) => ctx.systemPrompt.assemble({
+      agent,
+      scope: agent,
+      ...(modelSelection === undefined ? {} : { modelSelection }),
+    });
     // Send the same dual shape the plugin sends: 0.2.2 reads the single-call
     // batch (`calls`), 0.2.1 and older read the flat fields.
     const execute = async (agent, name, args) => {
@@ -129,14 +145,23 @@ async function verify(ctx) {
     await api('POST', '/settings/on-demand', { enabled: true });
     assembly = await assemble(native);
     evidence.directToolsInAssemblyWhileEnabled = direct(assembly).length;
-    evidence.deferLoadingMarked = direct(assembly).filter(tool => tool.deferLoading === true).length;
-    if (registryAssembly) {
+    evidence.deferLoadingMarked = direct(assembly).filter(tool => tool.deferLoading === true).length;    if (registryAssembly) {
       assert.equal(evidence.directToolsInAssemblyWhileEnabled, 2, 'the registry assembly keeps the deferred definitions');
       assert.equal(evidence.deferLoadingMarked, 2, 'the broker must mark direct tools deferLoading');
     } else {
       assert.equal(evidence.directToolsInAssemblyWhileEnabled, 0, 'the waterfall filter removes direct tools');
       assert.equal(evidence.deferLoadingMarked, 0);
     }
+    // Issue #33 route gate: a modelSelection naming an unregistered provider
+    // must fail safe to honoring — after an assemble that carried the route,
+    // the agent's visible def stays the full marked global registration and no
+    // per-agent shadow stub (empty parameters) appears.
+    await assemble(native, { provider: 'deferral-none', model: 'unregistered' });
+    const failSafe = ctx.tools.schemas(native).find(tool => tool.name === 'mcp__defer__echo_a');
+    evidence.routeGateFailSafe = failSafe !== undefined
+      && failSafe.deferLoading === true
+      && [...Object.values(failSafe.parameters?.properties ?? {})].length > 0;
+    assert.equal(evidence.routeGateFailSafe, true, JSON.stringify(failSafe));
     const brokerTools = assembly.tools.filter(tool => /^mcp_(search_tools|describe_tool|execute_tool)$/.test(tool.name));
     assert.equal(brokerTools.length, 3);
     assert.equal(brokerTools.every(tool => tool.deferLoading === undefined), true);
