@@ -135,12 +135,16 @@ marker per adapter) as the right final state.
   so a name hidden in the agent's visible view at the row's first
   materialization never gets a stub. A foreign mask applied later — after an
   agent's stubs are already materialized — leaves the registered stub
-  shadowing the masked name until the row disposes (residual, narrow).
+  shadowing the masked name until the row disposes (residual, narrow). The
+  mirror case is call-by-call benign: a tool (or a whole server) that connects
+  AFTER the row's baseline was taken gets no stub until the row disposes —
+  it stays visible through the global full definition, losing only the
+  prompt-budget compaction for that window.
 
 中文：v0.17.0 在模型目录缺少 `toolUpdate` 的路由上为 native agent 按需注册按 agent 的
 影子桩（空参数 schema + 指针描述），把承载全量 `mcp__*` schema 的请求面收敛为 broker
 三件套加桩，同时 describe/search 从插件自有注册存储返回完整 schema；支持路由、
-code/PTC/both agent 与任何解析失败都保持原行为、安全降级。陶套测试 282 项全部通过；
+code/PTC/both agent 与任何解析失败都保持原行为、安全降级。全套测试 283 项全部通过；
 `scripts/verify-deferral-dsh.mjs` 在 0.2.1-rc.5 与 0.2.2-rc.1 的真实 disposable profile
 上均验证通过（并附带 connection fence 认证修复）。未提交真实模型请求，未验证浏览器
 UI、Windows 与 headless profile；上游核心修复仍是最正确的最终状态。
