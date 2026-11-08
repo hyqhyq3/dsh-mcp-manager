@@ -93,9 +93,9 @@ async function fixture(t, { phase = 'initialize', status = 400, body = bodies.js
       register(definition) { registered.set(definition.name, definition); return () => registered.delete(definition.name); },
       guard: () => () => {}, restrict: () => () => {}, execute: async () => ({}),
     },
-    webServer, get: () => undefined, on: () => () => {}, effect,
+    webServer, get: name => (name === 'connection' ? { requestRejection: () => undefined } : undefined), on: () => () => {}, effect,
     inject(names, callback) {
-      if (names.includes('webServer')) callback({ webServer, get: () => undefined, effect });
+      if (names.includes('webServer')) callback({ webServer, get: name => (name === 'connection' ? { requestRejection: () => undefined } : undefined), effect });
       return { dispose() {} };
     },
   });

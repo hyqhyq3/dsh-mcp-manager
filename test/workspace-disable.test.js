@@ -98,7 +98,7 @@ function mount(t) {
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
     tools: rootRegistry,
-    get: name => name === 'workspaceRegistry' ? { list: () => [...workspaces.keys()].map(path => ({ path })) } : undefined,
+    get: name => name === 'connection' ? { requestRejection: () => undefined } : name === 'workspaceRegistry' ? { list: () => [...workspaces.keys()].map(path => ({ path })) } : undefined,
     on: () => () => {},
     effect,
     inject: (names, callback) => { callback({ agents, webServer, effect }); return { dispose() {} }; },

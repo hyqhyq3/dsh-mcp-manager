@@ -102,7 +102,7 @@ function mount(t, config, extraRegistry = []) {
   const webServer = { register: route => { handler = route.handler; return () => {}; } };
   const ctx = {
     logger: { info() {}, warn() {}, error() {} }, tools: registry,
-    get: name => name === 'workspaceRegistry' ? { list: () => [{ path: dir }, ...extraRegistry.map(path => ({ path }))] } : undefined,
+    get: name => name === 'connection' ? { requestRejection: () => undefined } : name === 'workspaceRegistry' ? { list: () => [{ path: dir }, ...extraRegistry.map(path => ({ path }))] } : undefined,
     on: () => () => {}, effect,
     inject: (names, callback) => { callback({ agents, webServer, effect }); return { dispose() {} }; },
   };

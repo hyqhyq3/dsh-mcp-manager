@@ -47,7 +47,8 @@ function makeCtx(config = {}, { registry = null } = {}) {
     logger: { info() {}, warn() {}, error() {} },
     tools: { guard: () => () => {}, register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
     webServer,
-    get: (name) => (name === 'workspaceRegistry' ? registry : undefined),
+    get: (name) => (name === 'connection' ? { requestRejection: () => undefined }
+      : name === 'workspaceRegistry' ? registry : undefined),
     on: () => () => {},
     inject: (names, callback) => {
       if (typeof callback === 'function' && names.includes('webServer')) {

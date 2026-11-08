@@ -30,7 +30,7 @@ function makeCtx() {
     logger: { info() {}, warn() {}, error() {} },
     tools: { register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
     webServer: { register: (route) => { routes.push(route); return () => {}; } },
-    get: () => undefined,
+    get: (name) => (name === 'connection' ? { requestRejection: () => undefined } : undefined),
     on: () => () => {},
     // The plugin injects `webServer` lazily (it is optional), so hand the
     // callback a child ctx exposing the stubbed webserver.
@@ -38,7 +38,7 @@ function makeCtx() {
       if (typeof callback === 'function' && names.includes('webServer')) {
         callback({
           webServer: ctx.webServer,
-          get: () => undefined,
+          get: (name) => (name === 'connection' ? { requestRejection: () => undefined } : undefined),
           effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose(); }; },
         });
       }

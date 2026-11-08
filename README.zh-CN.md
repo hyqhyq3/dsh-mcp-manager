@@ -174,6 +174,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 | 工具列表变化 | stdio 通知与 Streamable HTTP SSE 通道触发重新读取 `tools/list`；未变化的注册保持挂载 |
 | 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并对 `exclude`/`disabled` 中的全局名称应用 `tools.restrict({ deny })`；`disabled` 的工作区本地服务器保持声明，但不连接、不注册 |
 | 新版本兼容 | 组合出的 agent setup 优先取 setup 回调的第二个参数（DSH 0.1.5-alpha.1 起），仅在缺失时回退到旧的 `agent` 上下文访问器。新版 harness 移除了该访问器，直接读 `ctx.agent` 会抛 `cannot get property "agent" without inject`，导致每次 `agents.resume`/`create` 失败。GUI webserver 改为惰性注入，没有它的 profile 也能继续注册 MCP 工具，而不会留下未激活的条目 |
+| 管理面准入 | `/mcp-manager` 全部路由都要求 DSH 侧准入（issue #31）：经组合的 `connection` 服务（`requestRejection`）校验已登录的 DSH 会话（否则 401）及原生 Host/Origin 围栏（403）。服务缺失时按 503 fail-closed 拒绝，绝不退化为匿名访问。唯一例外：OAuth 回调放行 `state` 与该服务器仍挂起的授权流完全匹配的 GET——IdP 重定向不携带 DSH cookie，而约 256 位的 state 只交给了发起授权的那个浏览器；伪造、过期或非 GET 的回调一律拒绝 |
 | 交互通道 | 设置页与 host 半之间走同源 JSON API（`/mcp-manager/api/*`） |
 
 ## 验证与下一个门禁
