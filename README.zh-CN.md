@@ -38,7 +38,7 @@ MCP 界面通过 `mcp` locale 命名空间跟随 DSH 在**设置 → 通用 → 
 
 - DeepSeek Harness；设置 → MCP 页面需要 web profile（`npx @deepseek-ai/dsh web`）。在没有 GUI webserver 的 profile（headless/tui）上，插件仍会注册 MCP 工具并连接服务器，只是没有设置页。
 - Node.js `^22.19` 或 `>=24`；`PATH` 里有 pnpm
-- 已验证的 DSH 版本在 `package.json` → `dsh.compatibility.dshReleases` 中逐条声明（`0.1.2-rc.1`、`0.1.5-alpha.1`、`0.1.5-alpha.2`、`0.1.5-rc.1`、`0.2.1-rc.5`、`0.2.2-alpha.2` 为 `compatible`；支持范围 `>=0.1.2-rc.1 <0.3.0`）。未列出的版本是未经测试，不代表不兼容。上述声明来自一次性 Profile 实测：装进临时 `$DSH_HOME`，启动 `web` profile（`GET /mcp-manager/api/ping` 返回 200）、启动 `headless` profile 并确认 agent setup 生效（`0.1.5-*` 上还可确认 agent 能看到注册的 `mcp__<服务器>__<工具>`），随后删除该 Profile——全程不碰真实的 `~/.dsh`。自 `0.2.2` 起模型侧工具列表由注册表在提示词瀑布之后装配，因此 broker 改用 `deferLoading` 隐藏直连工具；`0.2.1-rc.5` 仍把列表交给提示词瀑布，在那里过滤。`0.2.*` 的两个条目另外通过了 `node scripts/verify-deferral-dsh.mjs <prefix>`（真实 web profile + mock MCP 服务器，不发模型请求）；未对它们重复 `headless` 启动验证。
+- 已验证的 DSH 版本在 `package.json` → `dsh.compatibility.dshReleases` 中逐条声明（`0.1.2-rc.1`、`0.1.5-alpha.1`、`0.1.5-alpha.2`、`0.1.5-rc.1`、`0.2.1-rc.5`、`0.2.2-alpha.2`、`0.2.2-rc.1` 为 `compatible`；支持范围 `>=0.1.2-rc.1 <0.3.0`）。未列出的版本是未经测试，不代表不兼容。上述声明来自一次性 Profile 实测：装进临时 `$DSH_HOME`，启动 `web` profile（`GET /mcp-manager/api/ping` 返回 200）、启动 `headless` profile 并确认 agent setup 生效（`0.1.5-*` 上还可确认 agent 能看到注册的 `mcp__<服务器>__<工具>`），随后删除该 Profile——全程不碰真实的 `~/.dsh`。自 `0.2.2` 起模型侧工具列表由注册表在提示词瀑布之后装配，因此 broker 改用 `deferLoading` 隐藏直连工具；`0.2.1-rc.5` 仍把列表交给提示词瀑布，在那里过滤。`0.2.*` 的两个条目另外通过了 `node scripts/verify-deferral-dsh.mjs <prefix>`（真实 web profile + mock MCP 服务器，不发模型请求）；未对它们重复 `headless` 启动验证。
 - Windows 10/11：stdio 命令经 `cmd.exe` 启动，以便 `.cmd` shim（`npx`、`uvx`）正确解析
 
 ## 安装
