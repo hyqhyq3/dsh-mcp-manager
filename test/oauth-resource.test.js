@@ -86,7 +86,7 @@ const state = () => JSON.parse(readFileSync(statePath, 'utf8'));
  * single-use refresh rotation, and an MCP endpoint that only accepts the live
  * access token.
  */
-function startStub({ publishResource = true, refreshMode = 'rotate', refreshDelayMs = 0, beforeRefreshReply = () => {} } = {}) {
+function startStub({ publishResource = true, refreshMode = 'rotate', refreshDelayMs = 0, beforeRefreshReply = () => {}, resourceMetadataPath = '/.well-known/oauth-protected-resource/mcp' } = {}) {
   const seen = [];
   const tokenForms = [];
   const registerBodies = [];
@@ -113,7 +113,7 @@ function startStub({ publishResource = true, refreshMode = 'rotate', refreshDela
         const token = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
         if (!validAccess.has(token)) {
           return send(401, { error: 'unauthorized' }, {
-            'WWW-Authenticate': `Bearer error="invalid_token", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+            'WWW-Authenticate': `Bearer error="invalid_token", resource_metadata="${base}${resourceMetadataPath}"`,
           });
         }
         const result = payload.method === 'initialize'
@@ -122,7 +122,7 @@ function startStub({ publishResource = true, refreshMode = 'rotate', refreshDela
         if (payload.id === undefined) { res.writeHead(202); return res.end(); }
         return send(200, { jsonrpc: '2.0', id: payload.id, result });
       }
-      if (req.url === '/.well-known/oauth-protected-resource/mcp') {
+      if (req.url === resourceMetadataPath) {
         const doc = { authorization_servers: [base] };
         if (publishResource) doc.resource = `${base}/mcp`;
         return send(200, doc);
@@ -238,6 +238,29 @@ it('sends the RFC 8707 resource from the protected-resource document at every st
   assert.equal(persisted.oauth.tokens.refresh_token, 'refresh-1');
 
   await stub.close();
+});
+
+it('issue #35: discovers a non-well-known resource metadata URL from the first-auth 401', async (t) => {
+  const resourceMetadataPath = '/mcp/.well-known/oauth-protected-resource/company/stream';
+  const stub = await startStub({ resourceMetadataPath });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const created = await request(handler, 'POST', '/mcp-manager/api/servers', {
+    name: 'first-auth-challenge', type: 'http', url: stub.mcpUrl, authMode: 'oauth',
+  });
+  assert.equal(created.code, 201);
+  const id = created.json.server.id;
+  assert.equal(state().servers.find((s) => s.id === id).oauth?.resourceMetadataUrl, undefined);
+
+  const authorizeUrl = await authorize(handler, id);
+  assert.equal(authorizeUrl.searchParams.get('resource'), stub.resource, 'the first authorize URL must carry the advertised resource');
+  assert.ok(stub.seen.includes('POST /mcp'), 'first auth must obtain the unauthenticated MCP challenge');
+  assert.ok(stub.seen.includes(`GET ${resourceMetadataPath}`), 'the advertised URL must be preferred over guessed well-known URLs');
+
+  await complete(handler, id, authorizeUrl);
+  assert.equal(stub.tokenForms[0].get('resource'), stub.resource, 'token exchange must carry the same resource');
+  const persisted = state().servers.find((s) => s.id === id);
+  assert.equal(persisted.oauth.resourceMetadataUrl, `${stub.base}${resourceMetadataPath}`);
 });
 
 it('refreshes with the resource, rotates the refresh token, and reuses the rotated one', async (t) => {
