@@ -51,7 +51,14 @@ function mount(t, config = {}) {
     assert.equal(connected.server.status, 'connected', connected.server.error);
     return connected.server;
   };
-  return { tools, request, connect, workspace, attach: () => agents.create({}), rescan: () => agents.resume({}) };
+  // A workspace's declared servers connect only after the user approves the
+  // file; every fixture attach/resume starts by approving it.
+  const trust = () => request('POST', '/workspaces/trust', { path: workspace, trusted: true });
+  return {
+    tools, request, connect, workspace,
+    attach: async () => { await trust(); return agents.create({}); },
+    rescan: async () => { await trust(); return agents.resume({}); },
+  };
 }
 
 it('normalizes optional millisecond budgets without throwing', () => {
