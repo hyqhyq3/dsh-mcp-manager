@@ -11,8 +11,8 @@ update to the newest tag to pick up fixes.
 Please do **not** open a public GitHub issue for security reports.
 
 Use GitHub's private vulnerability reporting on this repository
-(**Security → Report a vulnerability**), or contact the maintainer via a GitHub issue
-requesting a private channel. Include:
+(**Security → Report a vulnerability**). This is the only supported private channel;
+public issues are not a substitute. Include:
 
 - the affected version/commit;
 - a description of the impact;
