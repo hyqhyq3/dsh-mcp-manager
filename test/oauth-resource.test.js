@@ -259,6 +259,9 @@ it('issue #35: discovers a non-well-known resource metadata URL from the first-a
 
   await complete(handler, id, authorizeUrl);
   assert.equal(stub.tokenForms[0].get('resource'), stub.resource, 'token exchange must carry the same resource');
+  const mcpPosts = stub.seen.filter((entry) => entry === 'POST /mcp').length;
+  await authorize(handler, id);
+  assert.equal(stub.seen.filter((entry) => entry === 'POST /mcp').length, mcpPosts, 'cached resource metadata must not trigger another MCP challenge');
   const persisted = state().servers.find((s) => s.id === id);
   assert.equal(persisted.oauth.resourceMetadataUrl, `${stub.base}${resourceMetadataPath}`);
 });
