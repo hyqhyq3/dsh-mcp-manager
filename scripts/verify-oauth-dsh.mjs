@@ -1,4 +1,4 @@
-// Local-only real DSH Loader smoke for issue #21. No browser or model request.
+// Local-only real DSH Loader smoke for issues #21 and #35. No browser or model request.
 // Usage: node scripts/verify-oauth-dsh.mjs <DSH npm prefix> <plugin lib/index.js>
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
@@ -13,12 +13,13 @@ const scratch = mkdtempSync(join(tmpdir(), 'dsh-mm-issue21-loader-'));
 const workspace = join(scratch, 'workspace');
 mkdirSync(workspace);
 const resultPath = join(scratch, 'result.json');
+const tokenPath = join(scratch, 'launch-token.txt');
 const verifier = join(scratch, 'verify.mjs');
 writeFileSync(verifier, `
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 export const name = 'issue21-verifier';
 export const inject = ['agents', 'agentLoop', 'webServer'];
@@ -45,7 +46,7 @@ export function apply(ctx) {
      const base='http://127.0.0.1:'+server.address().port;
      const send=(status,body,headers={})=>{res.writeHead(status,{'Content-Type':'application/json',...headers});res.end(typeof body==='string'?body:JSON.stringify(body));};
      try {
-      if(req.url==='/.well-known/oauth-protected-resource/mcp') return send(200,{resource:base+'/mcp',authorization_servers:[base+'/issuer']});
+      if(req.url==='/mcp/.well-known/oauth-protected-resource/company/stream') return send(200,{resource:base+'/mcp',authorization_servers:[base+'/issuer']});
       if(req.url==='/.well-known/oauth-authorization-server/issuer') return send(200,{issuer:base+'/issuer',authorization_endpoint:base+'/authorize',token_endpoint:base+'/token',registration_endpoint:base+'/register',code_challenge_methods_supported:['S256'],token_endpoint_auth_methods_supported:['none']});
       if(req.url==='/register') {
        registrations++;
@@ -77,7 +78,7 @@ export function apply(ctx) {
        return send(200,{access_token:syntheticAccess,refresh_token:syntheticRefresh,expires_in:3600,token_type:'Bearer'});
       }
       if(req.url==='/mcp') {
-       if(req.headers.authorization!=='Bearer '+liveBearer) return send(401,{error:'unauthorized'},{'WWW-Authenticate':'Bearer resource_metadata="'+base+'/.well-known/oauth-protected-resource/mcp"'});
+       if(req.headers.authorization!=='Bearer '+liveBearer) return send(401,{error:'unauthorized'},{'WWW-Authenticate':'Bearer resource_metadata="'+base+'/mcp/.well-known/oauth-protected-resource/company/stream"'});
        const msg=JSON.parse(raw||'{}');
        methods.push(msg.method);
        if(msg.id===undefined) return send(202,'');
@@ -90,14 +91,22 @@ export function apply(ctx) {
   });
   try {
     await new Promise(r=>server.listen(0,'127.0.0.1',r));
-    await until(async()=>ctx.webServer.port && (await fetch(ctx.webServer.getOrigin()+'/mcp-manager/api/ping')).ok);
+    // The DSH connection fence requires an operator session cookie on admin routes.
+    const tokenPath=${JSON.stringify(tokenPath)};
+    let cookie='';
+    await until(async()=>{
+     if(!ctx.webServer.port || !existsSync(tokenPath)) return false;
+     const connection=await fetch(ctx.webServer.getOrigin()+'/connect?token='+encodeURIComponent(readFileSync(tokenPath,'utf8').trim()),{redirect:'manual'});
+     cookie=connection.headers.get('set-cookie')?.split(';')[0] ?? '';
+     return cookie!=='' && (await fetch(ctx.webServer.getOrigin()+'/mcp-manager/api/ping',{headers:{Cookie:cookie}})).ok;
+    });
     owned=await ctx.agents.create({sessionId:'issue21-isolated',meta:{cwd:${JSON.stringify(workspace)}}});
     const origin=ctx.webServer.getOrigin();
     const api=origin+'/mcp-manager/api';
-    const created=await fetch(api+'/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'local_oauth',type:'http',url:'http://127.0.0.1:'+server.address().port+'/mcp',authMode:'oauth',scope:'synthetic.read'})});
+    const created=await fetch(api+'/servers',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({name:'local_oauth',type:'http',url:'http://127.0.0.1:'+server.address().port+'/mcp',authMode:'oauth',scope:'synthetic.read'})});
     assert.equal(created.status,201);
     const id=(await created.json()).server.id;
-    const auth=await fetch(api+'/servers/'+id+'/auth',{method:'POST'});
+    const auth=await fetch(api+'/servers/'+id+'/auth',{method:'POST',headers:{Cookie:cookie}});
     const authBody=await auth.json();
     assert.equal(auth.status,200,JSON.stringify(authBody));
     authUrl=new URL(authBody.authorizeUrl);
@@ -109,7 +118,7 @@ export function apply(ctx) {
     assert.equal(new URL(redirect).origin,origin);
     const callback=await fetch(redirect+'?code=synthetic-code&state='+authUrl.searchParams.get('state'));
     assert.match(await callback.text(),/Authorized/);
-    const view=(await (await fetch(api+'/servers')).json()).servers.find(s=>s.id===id);
+    const view=(await (await fetch(api+'/servers',{headers:{Cookie:cookie}})).json()).servers.find(s=>s.id===id);
     assert.equal(view.status,'connected');
     assert.equal(view.toolCount,1);
     await until(()=>owned.agent.ctx.tools.schemas(owned.agent).some(t=>t.name==='mcp__local_oauth__echo'));
@@ -118,16 +127,16 @@ export function apply(ctx) {
     assert.equal(persisted.oauth.tokens.access_token,'synthetic-access');
     assert.equal(exchanges,1);
     assert.equal(registrations,1);
-    const reauth=await fetch(api+'/servers/'+id+'/auth',{method:'POST'});
+    const reauth=await fetch(api+'/servers/'+id+'/auth',{method:'POST',headers:{Cookie:cookie}});
     assert.equal(reauth.status,200);
     assert.equal(registrations,1);
-    const logs=(await (await fetch(api+'/servers/'+id+'/logs')).json()).logs;
+    const logs=(await (await fetch(api+'/servers/'+id+'/logs',{headers:{Cookie:cookie}})).json()).logs;
     for(const phase of ['register','token-exchange','tools/list']) assert.ok(logs.some(l=>l.phase===phase),phase);
     for(const method of ['initialize','notifications/initialized','tools/list']) assert.ok(methods.includes(method),method);
-    const manualCreated=await fetch(api+'/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'manual_oauth',type:'http',url:'http://127.0.0.1:'+server.address().port+'/mcp',authMode:'oauth',clientId:'synthetic-manual-client'})});
+    const manualCreated=await fetch(api+'/servers',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({name:'manual_oauth',type:'http',url:'http://127.0.0.1:'+server.address().port+'/mcp',authMode:'oauth',clientId:'synthetic-manual-client'})});
     assert.equal(manualCreated.status,201);
     const manualId=(await manualCreated.json()).server.id;
-    const manualAuth=await fetch(api+'/servers/'+manualId+'/auth',{method:'POST'});
+    const manualAuth=await fetch(api+'/servers/'+manualId+'/auth',{method:'POST',headers:{Cookie:cookie}});
     assert.equal(manualAuth.status,200);
     authUrl=new URL((await manualAuth.json()).authorizeUrl);
     redirect=authUrl.searchParams.get('redirect_uri');
@@ -136,7 +145,7 @@ export function apply(ctx) {
     assert.match(await manualCallback.text(),/Authorized/);
     assert.equal(registrations,1,'manual clients must skip dynamic registration');
     liveBearer=syntheticExpiredAccess;
-    const manualReconnect=await fetch(api+'/servers/'+manualId+'/connect',{method:'POST'});
+    const manualReconnect=await fetch(api+'/servers/'+manualId+'/connect',{method:'POST',headers:{Cookie:cookie}});
     assert.equal(manualReconnect.status,200);
     const manualView=(await manualReconnect.json()).server;
     assert.equal(manualView.status,'connected');
@@ -159,7 +168,11 @@ const child = spawn(process.execPath, [join(runtime, 'node_modules/@deepseek-ai/
   env: { ...process.env, HOME: scratch, USERPROFILE: scratch, DSH_HOME: join(scratch, '.dsh'), PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH}` },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-child.stdout.on('data', c => output += c);
+child.stdout.on('data', chunk => {
+  output += chunk;
+  const match = output.match(/[?&]token=([^\s"&]+)/);
+  if (match && !existsSync(tokenPath)) writeFileSync(tokenPath, match[1]);
+});
 child.stderr.on('data', c => output += c);
 const exit = new Promise(r => child.once('exit', r));
 try {
