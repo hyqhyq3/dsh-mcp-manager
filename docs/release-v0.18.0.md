@@ -87,9 +87,8 @@ All three are fixed in this release.
   targeted workspace regressions with scratch `HOME`/`DSH_HOME`. Linux CI still
   owns `npm test` (292 tests); one pre-existing OAuth state-file mode assertion
   in `oauth-resource.test.js` is Unix-specific and is not part of this
-  workflow. Canonical green run for v0.18.0:
-  https://github.com/hyqhyq3/dsh-mcp-manager/actions/runs/44737147461 (update
-  if re-run).
+  workflow.   Canonical green run for v0.18.0:
+  https://github.com/hyqhyq3/dsh-mcp-manager/actions/runs/44737508610
 
 ## Limits
 
