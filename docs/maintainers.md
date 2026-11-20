@@ -46,9 +46,15 @@ promising implementation, or committing to a schedule.
 
 - Do **not** close **confirmed bugs**, **blocked** work, or **security-related**
   threads merely for inactivity.
-- This repo does **not** enable automatic “stale” closing by default. If cleanup is
-  needed later: notify first, treat maintainer replies as resetting idle timers, and
-  prefer manual closure.
+- This repo does **not** enable automatic “stale” closing by default (no stale bot
+  today; any future policy stays **optional** and requires a separate maintainer
+  decision). If similar cleanup is adopted later: notify first, then prefer manual
+  closure.
+- **If** an idle timer is ever used: reset it only on a **reporter’s** (or other
+  affected **user’s**) **substantive** reply — new repro data, answers to asked
+  questions, or confirmation of a fix. **Do not** reset the waiting-for-user clock
+  on maintainer nudges (“any updates?”), bot/automation comments (including stale
+  warnings), or other meta traffic; those must not indefinitely extend a stall.
 - **Duplicate:** require a **canonical** issue link and the same root cause — not
   “sounds similar”.
 - **Already fixed:** cite the fixing commit **and** the **annotated release tag**

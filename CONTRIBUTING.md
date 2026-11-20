@@ -83,4 +83,6 @@ its [issue management notes](https://magpie.apache.org/docs/issue-management/rea
 Upstream emphasizes **human confirmation** and experimental “issue family” work;
 **this repository does not install Magpie** and does **not** run stale bots,
 auto-close, or auto-triage workflows unless explicitly adopted later in a separate
-decision.
+decision. If idle/stale handling is ever added, only a reporter’s substantive
+reply should reset a waiting clock — not maintainer reminders or bot comments
+(see [docs/maintainers.md](docs/maintainers.md)).
