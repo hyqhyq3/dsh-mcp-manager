@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,7 @@ describeWin('Windows stdio spawn (integration)', () => {
 
   it('routes a .cmd shim through cmd.exe with spaces and metacharacters intact', async () => {
     const shimDir = join(scratch, 'shim dir');
+    mkdirSync(shimDir, { recursive: true });
     const shim = join(shimDir, 'record.cmd');
     writeFileSync(shim, `@echo off\r\n"${process.execPath}" "${argvFixture}" %*\r\n`, 'utf8');
     const out = join(scratch, 'shim.json');
