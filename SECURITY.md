@@ -30,3 +30,11 @@ You can expect an initial response within 7 days.
   scope.
 - The stdio transport spawns local processes without shell expansion; command/argument
   injection from a workspace-supplied config is in scope.
+- `<workspace>/.dsh/dshmm/mcp.json` is treated as untrusted input: its entries never
+  connect until the user approves them, and the approval is bound to a fingerprint of
+  the command, args, env, cwd, url, headers and auth fields. Interpreter/loader hooks
+  in a server `env` (`NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`,
+  `PYTHONPATH`, `BASH_ENV`, …) are stripped. On Windows only `.cmd`/`.bat` shims go
+  through `cmd.exe`, and a token containing `"` or `%` is rejected rather than escaped.
+  A report showing how an unapproved entry can still execute, or how a changed entry
+  can keep its old approval, is in scope.

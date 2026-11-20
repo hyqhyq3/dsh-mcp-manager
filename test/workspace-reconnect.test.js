@@ -117,7 +117,15 @@ function mount(t, config, extraRegistry = []) {
     return { code, ...data };
   };
   const view = async () => (await request('GET', '/workspaces')).workspaces.find(ws => ws.path === dir)?.servers[0];
-  return { dir, write, request, view, registered, dispose, attach: () => agents.create({}), rescan: () => agents.resume({}), release: () => { for (const fn of agentCleanup.splice(0)) fn(); } };
+  // A workspace's declared servers connect only after the user approves the
+  // file; every fixture attach/resume starts by approving it.
+  const trust = () => request('POST', '/workspaces/trust', { path: dir, trusted: true });
+  return {
+    dir, write, request, view, registered, dispose,
+    attach: async () => { await trust(); return agents.create({}); },
+    rescan: async () => { await trust(); return agents.resume({}); },
+    release: () => { for (const fn of agentCleanup.splice(0)) fn(); },
+  };
 }
 const config = url => ({ local: { type: 'http', url, authMode: 'none' } });
 // Mirrors workspaceServerId: sha256(`${canonicalPath}\n${name}`)[0:20].
@@ -193,7 +201,7 @@ it('addresses a never-loaded workspace row by the deterministic id a rescan will
   const h = mount(t, config(remote.url), [other]);
   await h.attach(); // loads only h.dir; `other` stays registry-only
   const row = (await h.request('GET', '/workspaces')).workspaces.find(ws => ws.path === other).servers[0];
-  assert.equal(row.status, 'configured');
+  assert.equal(row.status, 'untrusted', 'a workspace that was never approved is listed but not connected');
   assert.equal(row.id, workspaceId(other, 'local'), 'a projected row must not carry a per-call random id');
   assert.equal((await h.request('GET', `/servers/${row.id}/logs`)).code, 200);
   assert.equal((await h.request('POST', `/servers/${row.id}/connect`)).code, 404, 'nothing is loaded to reconnect');

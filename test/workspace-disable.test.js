@@ -120,7 +120,12 @@ function mount(t) {
       dir,
       write,
       read: () => JSON.parse(readFileSync(file, 'utf8')),
-      attach: () => agents.create({ cwd: dir }),
+      // A workspace's declared servers connect only after the user approves the
+      // file, so every fixture attach starts by approving it.
+      attach: async () => {
+        await request('POST', '/workspaces/trust', { path: dir, trusted: true });
+        return agents.create({ cwd: dir });
+      },
       registry: () => agentRegistries.get(dir),
     };
   };

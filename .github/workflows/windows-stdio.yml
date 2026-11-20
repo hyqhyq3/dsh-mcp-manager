@@ -1,0 +1,42 @@
+name: Windows stdio spawn
+
+on:
+  push:
+    branches:
+      - main
+      - fix/workspace-trust-gate
+      - 'cursor/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: node --check lib/index.js && node --check lib/client.js
+      - name: Windows spawn integration
+        run: node --test test/windows-stdio-spawn.test.js
+      - name: Trust gate and Windows builder unit tests
+        env:
+          HOME: ${{ runner.temp }}\dsh-home
+          USERPROFILE: ${{ runner.temp }}\dsh-home
+          DSH_HOME: ${{ runner.temp }}\dsh-home
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
+          node --test test/workspace-trust.test.js test/legacy-config-migration.test.js
+      - name: v0.18.0 workspace regression (targeted)
+        env:
+          HOME: ${{ runner.temp }}\dsh-home-regress
+          USERPROFILE: ${{ runner.temp }}\dsh-home-regress
+          DSH_HOME: ${{ runner.temp }}\dsh-home-regress
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
+          node --test test/workspace-disable.test.js test/workspace-reconnect.test.js test/tool-timeout.test.js

@@ -27,6 +27,7 @@
 - **界面内诊断**：失败的服务器在**折叠状态**就显示失败原因（无需展开），展开后还有 **日志 / Logs** 面板——按需加载、已脱敏的轨迹，覆盖每一次发现 URL 与 HTTP 状态、客户端注册、授权跳转、token 交换/刷新、`initialize`、`tools/list`，以及 stdio 子进程退出时的 stderr 尾部。脱敏在**写入时**完成（Bearer 值、`code`/`state`、`client_secret`、token 一律剥掉），而不是渲染时。MCP 传输错误先脱敏再截断，工具列表刷新警告也在写入宿主日志前采用相同的脱敏处理。
 - **工具注册**：与内置客户端相同的 `mcp__<server>__<rawName>` 命名约定，含 DSH 工具注册表的严格 schema 清洗，并标记 `isConcurrencySafe`。
 - **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话；每条服务器（全局或工作区本地）都有独立的「在此工作区启用」开关，且不影响其他工作区。
+- **工作区信任**：工作区的 `mcp.json` 来自仓库本身，因此在用户确认前，其中声明的服务器**不会**连接（**设置 → MCP → 工作区 → 信任并连接**）。信任按条目记录并绑定其内容：命令、参数、URL、请求头或环境变量一旦变化就需要重新确认。因此仅打开一个未信任的仓库不会执行任何命令，也不会暴露任何工具。
 - **可选按需 broker**：模型侧固定只暴露 `mcp_search_tools`、`mcp_describe_tool`、`mcp_execute_tool`，不再每轮发送所有 `mcp__*` schema。默认关闭，必须手动开启。 `mcp_search_tools` 是零依赖词法排序器（BM25 + CJK/别名/模糊，且支持列目录兜底）。DSH 0.2.2 及更新版本用注册表的 `deferLoading` 标记隐藏直连工具，`0.2.1` 及更老的 harness 则在提示词瀑布里过滤。
 - **稳定刷新工具列表**：stdio 与 Streamable HTTP 收到 `notifications/tools/list_changed` 后，只更新新增、删除或 schema 变化的注册，未变化工具保持挂载。
 
@@ -63,7 +64,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-mana
 5. 无鉴权服务器：选择 **无鉴权（服务器无需认证）**——插件不发送 `Authorization` 头，保存后直接连接；适用于不做认证的端点（例如本机 `http://127.0.0.1:9316/mcp`）。
 6. 可选：打开页面顶部的**按需 MCP 工具调用**。该开关对整个 profile 生效，重启后保持，并在现有会话的下一次请求开始生效。
 
-状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。按钮：去认证、编辑、启用/禁用（开关）、删除。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要，展开后可用 **日志 / Logs**。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话；若只想对某个工作区关闭，请用工作区视图里每行的「在此工作区启用」开关。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
+状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用` / `待确认`（工作区条目等待确认）。按钮：去认证、编辑、启用/禁用（开关）、删除。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要，展开后可用 **日志 / Logs**。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话；若只想对某个工作区关闭，请用工作区视图里每行的「在此工作区启用」开关。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
 
 ### 工具调用超时
 
@@ -136,6 +137,7 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 }
 ```
 
+- **信任门**：`<workspace>/.dsh/dshmm/mcp.json` 里的条目在被确认前一律视为**未信任**，因为该文件由仓库控制——克隆一个仓库不该等于执行它的命令。未信任的行会以 `待确认 / untrusted` 徽章列出，不连接、也不注册任何工具；`POST /mcp-manager/api/workspaces/trust { path, trusted }` 支撑「信任并连接」与「撤销信任」按钮。信任按「规范化工作区路径 + 服务器名」记录在 `~/.dsh/mcp-manager.json`，并绑定一份指纹，涵盖决定「跑什么、数据发往哪里」的全部字段（type、command、args、`env`、`cwd`、url、鉴权方式、`headers`/`headerEnv`、`tokenEnv`、OAuth 客户端字段、scope）。其中任一字段变化都会重新询问；`timeout` 与 `disabled`/`exclude` 开关不会。通过设置页写入条目（新增、编辑或把开关打开）只会确认该条目本身，不会连带确认文件中的其他内容。从旧版本升级后，所有工作区都处于未确认状态（fail closed），每个工作区确认一次即可。
 - 已在 DSH 注册的工作区服务器可以**在 UI 里增删改**（选中工作区后点 **＋** 会写回该工作区的 `mcp.json`）。也可以直接手改文件——创建或修改文件都会被热重载；JSON 无效时界面会显示错误，并继续使用上一次有效的运行配置。
 - `type` 缺省为 `http`；stdio 服务器的 `cwd` 缺省为工作区根。`headers` / `headerEnv` / `env` / `args` 与设置页表单的格式一致。
 - 工作区服务器的工具**只**注册进「工作目录解析到该工作区」的会话；其他工作区的 agent 看不到它们。全局服务器除非被屏蔽，否则处处可见。
@@ -172,7 +174,7 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 | 图片结果 | `output.render` 文本优先；`execute(args, exec)` 暂存投影，`finalizeContent` 仅在路由模型声明图片输入时装上持久化 DSH attachment，其余情况降级为文本占位符 |
 | 按需 broker | Profile 开关注册三个 broker 工具；DSH `0.2.2+` 上原始 `mcp__*` 定义保留 `deferLoading` 标记（由 provider 适配器隐藏），老 harness 在提示词瀑布里过滤；模型目录缺少 `toolUpdate` 的路由上，插件按 agent 注册影子桩，使全量 schema 不再发往 provider（#33 缓解）；执行守卫只放行 `mcp_execute_tool`（以及执行器拥有提示词 section 的 PTC 程序） |
 | 工具列表变化 | stdio 通知与 Streamable HTTP SSE 通道触发重新读取 `tools/list`；未变化的注册保持挂载 |
-| 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并对 `exclude`/`disabled` 中的全局名称应用 `tools.restrict({ deny })`；`disabled` 的工作区本地服务器保持声明，但不连接、不注册 |
+| 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并对 `exclude`/`disabled` 中的全局名称应用 `tools.restrict({ deny })`；`disabled` 的工作区本地服务器保持声明，但不连接、不注册；未确认（`untrusted`）的条目同样只列出、从不连接 |
 | 新版本兼容 | 组合出的 agent setup 优先取 setup 回调的第二个参数（DSH 0.1.5-alpha.1 起），仅在缺失时回退到旧的 `agent` 上下文访问器。新版 harness 移除了该访问器，直接读 `ctx.agent` 会抛 `cannot get property "agent" without inject`，导致每次 `agents.resume`/`create` 失败。GUI webserver 改为惰性注入，没有它的 profile 也能继续注册 MCP 工具，而不会留下未激活的条目 |
 | 管理面准入 | `/mcp-manager` 全部路由都要求 DSH 侧准入（issue #31）：经组合的 `connection` 服务（`requestRejection`）校验已登录的 DSH 会话（否则 401）及原生 Host/Origin 围栏（403）。服务缺失时按 503 fail-closed 拒绝，绝不退化为匿名访问。唯一例外：OAuth 回调放行 `state` 与该服务器仍挂起的授权流完全匹配的 GET——IdP 重定向不携带 DSH cookie，而约 256 位的 state 只交给了发起授权的那个浏览器；伪造、过期或非 GET 的回调一律拒绝 |
 | 交互通道 | 设置页与 host 半之间走同源 JSON API（`/mcp-manager/api/*`） |
@@ -222,6 +224,12 @@ v0.15.1 的 `test/on-demand-deferral.test.js` 复现 DSH 0.2.2 的破坏（提�
 的 harness 未复测。证据与边界见 [v0.15.1 验证记录](docs/release-v0.15.1.md)。
 本次只在兼容性声明中新增已实测的两个条目。
 
+v0.18.0 的 `test/workspace-trust.test.js` 通过真实 `apply()` API 覆盖确认门：
+未确认的条目从不连接、不注册工具、手动连接也被拒绝；确认后连接并持久化指纹；
+URL/命令变化后撤回旧工具并要求重新确认；改 `disabled` 不要求；设置页写入只确认
+该条目本身；stdio 服务器的 `NODE_OPTIONS` 不会到达子进程。
+`test/legacy-config-migration.test.js` 固定 Windows 命令行构造与 `.cmd`/`.bat` 判定。
+
 v0.16.0 的 `test/workspace-disable.test.js` 通过真实 `apply()` API 端到端覆盖按工作区的
 `disabled` 列表：只在某一个工作区屏蔽全局服务器（`exclude` 行为不变）、被禁用的工作区本地
 服务器保持声明但从不连接/注册、`/workspaces/server-state` 开关对该工作区的已有 agent 与
@@ -261,7 +269,8 @@ DSH 0.2.1-rc.2 Loader、agent、工具注册表和 native 模式 broker，对接
 - 按需过滤支持 `native` 呈现。Code/PTC/both agent 保留当前会话可见的完整 MCP 目录；其呈现方式取自执行器的提示词 section（harness 仍提供瀑布载荷时也读该载荷）。导出的 SDK renderer 未提供“仅呈现目录”的契约，见[接口证据与降级方案](docs/on-demand-code-mode.md)；完整 SDK 压缩仍由 [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18) 跟进。
 - 在 DSH ≤ 0.2.2-rc.1 上，按需过滤只有在模型目录声明了 `toolUpdate` 的路由上才能收起 schema（deepseek-official 即是）。没有 `toolUpdate` 的 provider（`llm-pi-ai` 后端的 `api: openai-completions` 是常见组合）会走核心的"立即可用工具"分支——该分支在插件返回之后剥掉 `deferLoading` 标记——否则全部 `mcp__*` schema 会随每次请求发给 provider。自 v0.17.0 起插件自行做了缓解：在这类路由上，每个 native agent 都会拿到**按 agent 的影子桩（shadow stubs）**——在其自身工具作用域内注册同名 `mcp__<服务器>__<工具>`、短指针描述、空参数 schema 的桩定义——使请求载荷从全量 schema 收敛为 broker 三件套加每工具一条桩（[#33](https://github.com/hyqhyq3/dsh-mcp-manager/issues/33) 报告实测 197 个工具要花 82k token），同时 `mcp_search_tools`/`mcp_describe_tool` 仍从插件自有的注册存储中返回完整 schema。支持路由（deepseek-official）、code/PTC/both agent，以及任何模型路由解析失败的情形都保持原有的完整面；上游核心修复（按 adapter 保留或尊重该标记）仍是最正确的最终状态，见 issue 线程。
 - OAuth token 明文存于 `~/.dsh` 下的 JSON 文件——请当作机密对待。静态 token 与 `headerEnv` 的值从环境变量读取，不落盘。工作区 OAuth token 也存于同一状态文件，不写进工作区的 `mcp.json`。
-- stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下整条命令行交给 `cmd.exe`，`&`、`|`、`>`、`%VAR%` 等会被 shell 解释——命令与含空格的参数会被自动加引号（已加引号的原样保留），但仍建议使用绝对路径。
+- 工作区的 `mcp.json` 按不可信输入处理：条目在确认前不连接（见 **工作区信任**）；stdio 服务器的 `env` 不允许设置解释器/加载器钩子（`NODE_OPTIONS`、`NODE_PATH`、`LD_PRELOAD`、`DYLD_INSERT_LIBRARIES`、`PYTHONPATH`、`BASH_ENV` 等），这些键会被丢弃并记录日志。Windows 下只有 `.cmd`/`.bat` shim 会经由 `cmd.exe` 启动，且包含 `"` 或 `%`（cmd 无法按字面处理）的参数会被直接拒绝，而不是做半吊子转义。
+- stdio 服务器以子进程常驻运行，随插件生命周期存活。POSIX 下 `args` 按空格分词（引号可保护含空格的参数），不含 shell 展开；Windows 下 `.exe` 直接启动，只有 `.cmd`/`.bat` 交给 `cmd.exe`，其命令行由插件自行加引号并校验，含 `"` 或 `%` 的参数会被拒绝。
 - 每个 GUI origin 一次 OAuth 客户端注册；GUI 换地址后下次登录会自动重新注册；修改配置的 **Client 名称**会用新名称重新注册，旧客户端的 token 随之丢弃（需要重新授权）。手动配置的 Client ID 永远不会被重新注册——其重定向 URI 必须已在提供方白名单里，因此 GUI 换 origin 会表现为提供方侧的重定向错误，而不是自动修复。
 - 尝试日志位于 host 内存：浏览器刷新仍在，DSH 重启后丢失，且每服务器上限 20 条。持久记录仍是 DSH 服务端日志（`ctx.logger`）；插件刻意不写日志文件。
 - 手动 OAuth 字段只做了校验，未在此处对真实提供方验证过；客户端认证方式只支持 `client_secret_post`（不支持 `client_secret_basic`）。部分提供方（Meta、Figma）会对动态注册的 `client_name` 做白名单，支持的做法是填写 **Client 名称**；插件不会把其他产品的名称作为默认值。动态注册签发的 `client_secret` 与 token 一样存放在 `~/.dsh/mcp-manager.json`（0600），不会通过 API 返回，也不会写入日志；只有请求了 `client_secret_post` 的注册才会发送它，手动配置 Client ID 时绝不发送。

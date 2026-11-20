@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { migrateLoadedState, normalizeEnvPairs, quoteWindowsToken } from '../lib/index.js';
+import { join } from 'node:path';
+import { migrateLoadedState, normalizeEnvPairs, buildWindowsCmdLine, windowsNeedsShell, windowsShellSpec } from '../lib/index.js';
 
 describe('normalizeEnvPairs (legacy [{ name, value }] support)', () => {
   it('converts the legacy list into a flat map', () => {
@@ -79,34 +80,54 @@ describe('migrateLoadedState', () => {
   });
 });
 
-describe('quoteWindowsToken (cmd.exe command line)', () => {
-  it('quotes a command path containing spaces', () => {
+describe('buildWindowsCmdLine (cmd.exe command line for .cmd/.bat shims)', () => {
+  it('quotes tokens containing whitespace or cmd metacharacters', () => {
     assert.equal(
-      quoteWindowsToken('C:\\Users\\me\\AppData\\Local\\GitHub CLI\\extensions\\gh-mcp.exe'),
-      '"C:\\Users\\me\\AppData\\Local\\GitHub CLI\\extensions\\gh-mcp.exe"',
+      buildWindowsCmdLine('C:\\Users\\me\\AppData\\Local\\GitHub CLI\\extensions\\gh-mcp.cmd'),
+      '"C:\\Users\\me\\AppData\\Local\\GitHub CLI\\extensions\\gh-mcp.cmd"',
     );
+    assert.equal(buildWindowsCmdLine('npx', ['-y', 'a b', 'plain']), 'npx -y "a b" plain');
+    assert.equal(buildWindowsCmdLine('cmd', ['a&b', 'c|d', '(e)']), 'cmd "a&b" "c|d" "(e)"');
   });
 
-  it('leaves a token without whitespace or quotes untouched', () => {
-    assert.equal(quoteWindowsToken('npx'), 'npx');
-    assert.equal(quoteWindowsToken('C:\\tools\\uvx.cmd'), 'C:\\tools\\uvx.cmd');
-    assert.equal(quoteWindowsToken('-y'), '-y');
+  it('refuses tokens cmd.exe cannot treat literally instead of half-escaping them', () => {
+    // `\"` is not an escape in cmd.exe, so a quote used to break out of the
+    // quoted argument (the reported bypass) must be rejected.
+    assert.throws(() => buildWindowsCmdLine('npx', ['x" & calc & "y']), /cannot pass/);
+    assert.throws(() => buildWindowsCmdLine('npx', ['%PATH%']), /cannot pass/);
+    assert.throws(() => buildWindowsCmdLine('npx', ['line\nbreak']), /cannot pass/);
+    assert.throws(() => buildWindowsCmdLine('na"me'), /cannot pass/);
+  });
+});
+
+describe('windowsNeedsShell (.cmd/.bat detection)', () => {
+  const fileExists = (...present) => (path) => present.includes(path);
+
+  it('routes explicit .cmd/.bat paths through cmd.exe and leaves .exe alone', () => {
+    assert.equal(windowsNeedsShell('C:\\tools\\uvx.cmd'), true);
+    assert.equal(windowsNeedsShell('C:\\tools\\uvx.BAT'), true);
+    assert.equal(windowsNeedsShell('C:\\tools\\uvx.exe'), false);
+    assert.equal(windowsNeedsShell('C:\\tools\\uvx'), false, 'CreateProcess appends .exe for an explicit path');
   });
 
-  it('is idempotent for a token the user already quoted', () => {
-    const quoted = '"C:\\path with space\\server.exe"';
-    assert.equal(quoteWindowsToken(quoted), quoted);
-    assert.equal(quoteWindowsToken(quoteWindowsToken(quoted)), quoted);
+  it('resolves a bare name by PATH then PATHEXT, dir-major', () => {
+    // Paths are joined with the host separator, so build the expectations the
+    // same way rather than hardcoding a Windows-only string.
+    const options = (present) => ({ pathEnv: 'C:\\a;C:\\b', pathext: '.EXE;.CMD', pathDelimiter: ';', fileExists: fileExists(...present) });
+    assert.equal(windowsNeedsShell('npx', options([join('C:\\b', 'npx.CMD')])), true);
+    assert.equal(windowsNeedsShell('npx', options([join('C:\\a', 'npx.EXE'), join('C:\\b', 'npx.CMD')])), false, 'the first PATH hit wins');
+    assert.equal(windowsNeedsShell('missing', options([])), false);
   });
+});
 
-  it('quotes an empty token and escapes inner quotes', () => {
-    assert.equal(quoteWindowsToken(''), '""');
-    assert.equal(quoteWindowsToken('say "hi"'), '"say \\"hi\\""');
-  });
-
-  it('produces the command line the issue reporter verified', () => {
-    const command = quoteWindowsToken('C:\\path with space\\server.exe');
-    const args = ['--flag', 'a b', 'plain'].map(quoteWindowsToken);
-    assert.equal([command, ...args].join(' '), '"C:\\path with space\\server.exe" --flag "a b" plain');
+describe('windowsShellSpec (cmd.exe invocation)', () => {
+  it('wraps the line in the pair of quotes cmd /s unwraps and asks for verbatim arguments', () => {
+    const spec = windowsShellSpec('npx', ['-y', 'a b']);
+    // Node's own `shell: true` shape: the whole line in one pair of quotes.
+    // Without `verbatim` Node would re-quote it and turn the inner `"` into the
+    // `\"` cmd.exe does not understand.
+    assert.deepEqual(spec.args, ['/d', '/s', '/c', '"npx -y "a b""']);
+    assert.equal(spec.verbatim, true);
+    assert.ok(spec.command);
   });
 });
