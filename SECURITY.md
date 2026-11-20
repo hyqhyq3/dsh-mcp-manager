@@ -20,6 +20,11 @@ public issues are not a substitute. Include:
 
 You can expect an initial response within 7 days.
 
+Private reports are **not** validated, closed, or discussed in public issues. Do not
+post proof-of-concept details or undisclosed advisory text in public threads.
+Maintainers triage per [docs/maintainers.md](docs/maintainers.md) (human review
+only — no automatic closure of security items for inactivity).
+
 ## Scope and design notes
 
 - The plugin state file `~/.dsh/mcp-manager.json` stores OAuth tokens and static

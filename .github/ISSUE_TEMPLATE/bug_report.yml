@@ -1,0 +1,63 @@
+name: Bug report
+description: Something broke, regressed, or does not match documented behavior
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You do **not** need to prove this is a bug — describe what happened.
+        For **security** concerns, do **not** use this form; use [private vulnerability reporting](https://github.com/hyqhyq3/dsh-mcp-manager/security/advisories/new) instead.
+        Do not attach secrets, live tokens, or weaponized exploits.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version or git ref
+      description: Annotated tag (e.g. v0.18.0) or commit SHA — not only branch name
+      placeholder: v0.18.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other / unknown
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version (if known)
+      placeholder: e.g. 22.19.0
+  - type: input
+    id: dsh
+    attributes:
+      label: DSH version / profile (if known)
+      placeholder: e.g. web profile, 0.2.2-rc.1
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Shortest path; optional minimal config — no full secrets
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or diagnostics
+      description: Settings → MCP Logs, or server errors with tokens and client_secret removed

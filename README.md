@@ -313,6 +313,14 @@ remaining platform boundaries. This does not expand the compatibility matrix.
 - Attempt logs are in-memory on the host: they survive a browser refresh but not a DSH restart, and they are capped at 20 entries per server. The durable record remains the DSH server log (`ctx.logger`); the plugin deliberately writes no log file.
 - The manual OAuth fields are validated but not proven against a live provider here — `client_secret_post` is the only supported client authentication method (no `client_secret_basic`). Some providers (Meta, Figma) gate dynamic registration on a `client_name` allowlist; setting **Client name** is the supported path, but the plugin deliberately does not ship another product's name as a default. A registration-issued `client_secret` is stored in `~/.dsh/mcp-manager.json` (0600) like the tokens; it is never returned by the API or written to a log, and it is presented only by a registration that asked for `client_secret_post` — never with a manual Client ID.
 
+## Contributing
+
+Open [bug](https://github.com/hyqhyq3/dsh-mcp-manager/issues/new?template=bug_report.yml)
+or [feature](https://github.com/hyqhyq3/dsh-mcp-manager/issues/new?template=feature_request.yml)
+issues using the templates when you can. Security reports use
+[private vulnerability reporting](https://github.com/hyqhyq3/dsh-mcp-manager/security/advisories/new)
+only — see [SECURITY.md](SECURITY.md). Full guidance: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 MIT

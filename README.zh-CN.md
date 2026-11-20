@@ -275,6 +275,13 @@ DSH 0.2.1-rc.2 Loader、agent、工具注册表和 native 模式 broker，对接
 - 尝试日志位于 host 内存：浏览器刷新仍在，DSH 重启后丢失，且每服务器上限 20 条。持久记录仍是 DSH 服务端日志（`ctx.logger`）；插件刻意不写日志文件。
 - 手动 OAuth 字段只做了校验，未在此处对真实提供方验证过；客户端认证方式只支持 `client_secret_post`（不支持 `client_secret_basic`）。部分提供方（Meta、Figma）会对动态注册的 `client_name` 做白名单，支持的做法是填写 **Client 名称**；插件不会把其他产品的名称作为默认值。动态注册签发的 `client_secret` 与 token 一样存放在 `~/.dsh/mcp-manager.json`（0600），不会通过 API 返回，也不会写入日志；只有请求了 `client_secret_post` 的注册才会发送它，手动配置 Client ID 时绝不发送。
 
+## 参与贡献
+
+请尽量用 [Bug 模板](https://github.com/hyqhyq3/dsh-mcp-manager/issues/new?template=bug_report.yml) 或
+[功能建议模板](https://github.com/hyqhyq3/dsh-mcp-manager/issues/new?template=feature_request.yml) 开 issue。
+安全问题请**仅**通过 [GitHub 私密漏洞报告](https://github.com/hyqhyq3/dsh-mcp-manager/security/advisories/new)（见 [SECURITY.md](SECURITY.md)）。
+完整说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## License
 
 MIT
