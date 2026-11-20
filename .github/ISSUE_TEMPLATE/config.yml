@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability (private)
+    url: https://github.com/hyqhyq3/dsh-mcp-manager/security/advisories/new
+    about: Public issues are not a security channel. Use GitHub private vulnerability reporting — see SECURITY.md.
+  - name: Contributing guide
+    url: https://github.com/hyqhyq3/dsh-mcp-manager/blob/main/CONTRIBUTING.md
+    about: Templates, triage categories, and what to include in reports.

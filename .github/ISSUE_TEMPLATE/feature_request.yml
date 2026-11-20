@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a new capability or a deliberate behavior change
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are welcome; filing does **not** commit the maintainers to implement or schedule work.
+        For bugs, use the bug template. For security, use [private vulnerability reporting](https://github.com/hyqhyq3/dsh-mcp-manager/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: Version you are using (if any)
+      placeholder: e.g. v0.18.0
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What limitation are you hitting today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional — workarounds, other tools, or slimmer scope
