@@ -79,12 +79,17 @@ All three are fixed in this release.
   runs only on `win32`), 0 failures.
 - `node --check lib/index.js && node --check lib/client.js`.
 - **Windows (GitHub Actions)**: workflow `.github/workflows/windows-stdio.yml`
-  on `windows-latest` runs `test/windows-stdio-spawn.test.js` (real
-  `child_process.spawn` for direct `node.exe`, a `.cmd` shim, metacharacter
-  preservation, and pre-spawn rejection of cmd-literal tokens) plus
-  `test/workspace-trust.test.js`, `test/legacy-config-migration.test.js`, and the
-  full suite with scratch `HOME`/`DSH_HOME`. Record the run URL in the release
-  tag message or this file when publishing.
+  on `windows-latest` (Node 22, `windows-2025-vs2026`) runs
+  `test/windows-stdio-spawn.test.js` (real `child_process.spawn`: direct
+  `node.exe`, a `.cmd` shim under a path containing spaces, metacharacter tokens
+  preserved, pre-spawn rejection with no marker file), then
+  `test/workspace-trust.test.js`, `test/legacy-config-migration.test.js`, and
+  targeted workspace regressions with scratch `HOME`/`DSH_HOME`. Linux CI still
+  owns `npm test` (292 tests); one pre-existing OAuth state-file mode assertion
+  in `oauth-resource.test.js` is Unix-specific and is not part of this
+  workflow. Canonical green run for v0.18.0:
+  https://github.com/hyqhyq3/dsh-mcp-manager/actions/runs/44737147461 (update
+  if re-run).
 
 ## Limits
 
