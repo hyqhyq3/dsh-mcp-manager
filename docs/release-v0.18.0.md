@@ -75,14 +75,22 @@ All three are fixed in this release.
   (quoting, metacharacter quoting, rejection of `"`/`%`/newline), the
   `.cmd`/`.bat` detection (explicit paths, PATH/PATHEXT dir-major order), and
   the `/d /s /c "…"` + verbatim shape of `windowsShellSpec`.
-- Full suite: `npm test` → 291 tests, 0 failures.
+- Full suite: `npm test` → 292 tests on Linux (Windows integration subsuite
+  runs only on `win32`), 0 failures.
 - `node --check lib/index.js && node --check lib/client.js`.
+- **Windows (GitHub Actions)**: workflow `.github/workflows/windows-stdio.yml`
+  on `windows-latest` runs `test/windows-stdio-spawn.test.js` (real
+  `child_process.spawn` for direct `node.exe`, a `.cmd` shim, metacharacter
+  preservation, and pre-spawn rejection of cmd-literal tokens) plus
+  `test/workspace-trust.test.js`, `test/legacy-config-migration.test.js`, and the
+  full suite with scratch `HOME`/`DSH_HOME`. Record the run URL in the release
+  tag message or this file when publishing.
 
 ## Limits
 
-- No browser click-through of the new trust bar was run, and Windows was not
-  exercised: the Windows path is covered by unit tests only, as in previous
-  releases.
+- No browser click-through of the new trust bar was run.
+- Windows coverage is GitHub Actions–only unless a maintainer records a local run
+  here; Linux runners skip `test/windows-stdio-spawn.test.js`.
 - Existing installations start with every workspace unapproved (fail closed):
   one click per workspace re-enables its servers. This is intentional and not
   migrated, since a repository that was already opened must not be granted
